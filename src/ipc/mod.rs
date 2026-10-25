@@ -68,7 +68,7 @@ impl IpcServer {
         event_loop: &LoopHandle<'static, DriftWm>,
         wayland_display: &str,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Self::new_at(event_loop, socket_path(wayland_display))
+        Self::new_at(event_loop, socket_path(wayland_display)?)
     }
 
     /// Bind the IPC listener at an explicit path instead of the

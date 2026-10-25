@@ -5,7 +5,7 @@
 //! with `socat` and usable from any scripting language, not just `driftwm msg`.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -354,13 +354,22 @@ pub struct CanvasLayerInfo {
 }
 
 /// Path to the IPC socket for a given `WAYLAND_DISPLAY` name:
-/// `$XDG_RUNTIME_DIR/driftwm/ipc-<wayland_display>.sock` (falls back to `/tmp`).
+/// `$XDG_RUNTIME_DIR/driftwm/ipc-<wayland_display>.sock`. With no
+/// `XDG_RUNTIME_DIR` there is no private directory to put it in, so this is an
+/// error rather than a fallback into a shared one.
 ///
 /// Deriving the name from the wayland display lets each compositor instance own
 /// a distinct socket and lets `driftwm msg` auto-target the session it runs in.
-pub fn socket_path(wayland_display: &str) -> PathBuf {
-    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(dir)
+pub fn socket_path(wayland_display: &str) -> Result<PathBuf, String> {
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|dir| !dir.is_empty())
+        .ok_or("XDG_RUNTIME_DIR is not set, so there is no IPC socket directory")?;
+    Ok(socket_path_in(Path::new(&dir), wayland_display))
+}
+
+/// [`socket_path`] under an explicit runtime directory.
+pub fn socket_path_in(runtime_dir: &Path, wayland_display: &str) -> PathBuf {
+    runtime_dir
         .join("driftwm")
         .join(format!("ipc-{wayland_display}.sock"))
 }
@@ -766,10 +775,8 @@ mod tests {
 
     #[test]
     fn socket_path_uses_wayland_display() {
-        // SAFETY: single-threaded test; no other thread reads the env here.
-        unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000") };
         assert_eq!(
-            socket_path("wayland-1"),
+            socket_path_in(Path::new("/run/user/1000"), "wayland-1"),
             PathBuf::from("/run/user/1000/driftwm/ipc-wayland-1.sock")
         );
     }

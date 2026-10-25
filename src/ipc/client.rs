@@ -312,7 +312,7 @@ pub fn run(msg: &Msg, json: bool) -> Result<(), Box<dyn std::error::Error>> {
         None => {
             let display = std::env::var("WAYLAND_DISPLAY")
                 .map_err(|_| "WAYLAND_DISPLAY is not set — are you in a driftwm session?")?;
-            socket_path(&display)
+            socket_path(&display)?
         }
     };
 
