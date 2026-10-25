@@ -1,5 +1,6 @@
 //! The IPC socket under clients that misbehave: one streaming requests is
-//! served a read at a time so the loop keeps turning.
+//! served a read at a time so the loop keeps turning, and connections past
+//! the cap are dropped as soon as they are accepted.
 
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -30,6 +31,37 @@ fn replies_ready(stream: &mut UnixStream) -> usize {
         }
     }
     count
+}
+
+/// Whether the server closed `stream`, pumping until it says either way.
+fn closed_by_server(f: &mut Fixture, stream: &mut UnixStream) -> bool {
+    stream
+        .set_read_timeout(Some(Duration::from_millis(10)))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        f.pump(1);
+        match stream.read(&mut [0u8; 64]) {
+            Ok(0) => return true,
+            Ok(_) => return false,
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+            Err(_) => return true,
+        }
+    }
+    false
+}
+
+/// Send one request on `stream` and wait for its reply.
+fn answered(f: &mut Fixture, stream: &mut UnixStream) -> bool {
+    stream.write_all(&request_line()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        f.pump(1);
+        if replies_ready(stream) > 0 {
+            return true;
+        }
+    }
+    false
 }
 
 fn connect(ipc: &Path) -> UnixStream {
@@ -70,4 +102,38 @@ fn a_client_streaming_requests_is_served_one_read_per_turn_of_the_loop() {
         total += replies_ready(&mut stream);
     }
     assert_eq!(total, count, "every request was answered");
+}
+
+#[test]
+fn connections_past_the_cap_are_dropped_and_a_freed_slot_is_reused() {
+    let temp = TempDir::new();
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let ipc = f.start_ipc(temp.path());
+
+    let mut held: Vec<UnixStream> = (0..64).map(|_| connect(&ipc)).collect();
+    f.pump(2);
+    assert!(
+        answered(&mut f, &mut held[0]),
+        "a connection under the cap is served"
+    );
+    assert!(
+        answered(&mut f, &mut held[63]),
+        "the cap's last slot is served"
+    );
+
+    let mut over = connect(&ipc);
+    assert!(
+        closed_by_server(&mut f, &mut over),
+        "a connection past the cap is closed"
+    );
+
+    drop(held.pop());
+    f.pump(2);
+    let mut next = connect(&ipc);
+    f.pump(2);
+    assert!(
+        answered(&mut f, &mut next),
+        "a freed slot takes a new connection"
+    );
 }

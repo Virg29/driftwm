@@ -3,6 +3,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use smithay::reexports::calloop::generic::Generic;
@@ -26,6 +27,10 @@ use self::protocol::{
 /// Reject a command line longer than this (without a newline) — bounds the
 /// per-connection buffer against a client that never terminates a command.
 const MAX_COMMAND_SIZE: usize = 4096;
+
+/// Connections served at once. One past it is accepted and closed straight
+/// away, which also takes it off the level-triggered listener.
+const MAX_CONNECTIONS: usize = 64;
 
 /// Cap how long the writes answering one read may block in all, so a stuck
 /// or trickling reader can't hang the loop.
@@ -84,11 +89,20 @@ impl IpcServer {
 
         tracing::info!("IPC socket started at {}", socket_path.display());
 
+        // Each connection's callback holds a clone; calloop drops it with the
+        // source, so the count is the live connections plus this one.
+        let slots = Rc::new(());
         let source = Generic::new(listener, Interest::READ, Mode::Level);
-        event_loop.insert_source(source, |_, listener, state| {
+        event_loop.insert_source(source, move |_, listener, state| {
             loop {
                 match listener.accept() {
-                    Ok((stream, _)) => accept_client(state, stream),
+                    Ok((stream, _)) if Rc::strong_count(&slots) > MAX_CONNECTIONS => {
+                        tracing::debug!(
+                            "IPC: {MAX_CONNECTIONS} connections open, closing a new one"
+                        );
+                        drop(stream);
+                    }
+                    Ok((stream, _)) => accept_client(state, stream, slots.clone()),
                     Err(e) if e.kind() == ErrorKind::WouldBlock => break,
                     // A transient accept error (e.g. fd exhaustion) must never
                     // tear down the compositor — log and keep serving.
@@ -113,8 +127,9 @@ impl Drop for IpcServer {
 }
 
 /// Register an accepted connection as its own calloop source. The closure owns a
-/// per-connection read buffer so partial commands survive across event-loop ticks.
-fn accept_client(state: &mut DriftWm, stream: UnixStream) {
+/// per-connection read buffer so partial commands survive across event-loop
+/// ticks, and the connection's `slot` for as long as the source lives.
+fn accept_client(state: &mut DriftWm, stream: UnixStream, slot: Rc<()>) {
     if let Err(e) = stream.set_nonblocking(true) {
         tracing::warn!("IPC: failed to set client nonblocking: {e}");
         return;
@@ -126,6 +141,7 @@ fn accept_client(state: &mut DriftWm, stream: UnixStream) {
     let registered = state
         .loop_handle
         .insert_source(source, move |_, stream, state| {
+            let _slot = &slot;
             Ok(serve_connection(stream, &mut buffer, state))
         });
     if let Err(e) = registered {
