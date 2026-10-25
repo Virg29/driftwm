@@ -342,7 +342,7 @@ a click on a partly off-screen window scrolls it just into view
 
 Default: `20`
 
-px per nudge-window step
+px per nudge-window step (also move-to-snap's when there is no stop that way)
 
 ### `resize_step`
 
@@ -752,7 +752,7 @@ Actions:
 - `close-window` — close the focused window
 - `suspend-window` — close the focused window, leaving a suspended stand-in (needs a .desktop entry); on a stand-in, dismiss it
 - `nudge-window <dir>` — move the focused window by nudge_step px
-- `move-to-snap <dir>` — move the focused window to the next snap stop that way, never onto another window
+- `move-to-snap <dir>` — move the focused window to the next snap stop that way, else by nudge_step px; never onto another window
 - `grow-window <dir>` — push the focused window's `<dir>` edge out by resize_step px
 - `shrink-window <dir>` — pull the focused window's `<dir>` edge in by resize_step px
 - `resize-to-snap <dir>` — right/down grow the right/bottom edge to the next snap stop, never over a window; left/up pull it back

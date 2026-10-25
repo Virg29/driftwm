@@ -10,6 +10,7 @@ use smithay::utils::{Logical, Point, SERIAL_COUNTER, Size};
 use wayland_client::protocol::wl_surface::WlSurface as ClientSurface;
 
 use super::client::ClientId;
+use super::real::TempDir;
 use super::{
     Fixture, TICK, ack_with_size, config, configure_count, give_ssd, last_configured, map_window,
     settle, window_by_app_id, window_position,
@@ -54,7 +55,7 @@ fn act(f: &mut Fixture, action: Action) {
 }
 
 #[test]
-fn move_to_snap_docks_at_the_gap_and_stops_when_nothing_is_further() {
+fn move_to_snap_docks_at_the_gap_and_nudges_when_nothing_is_further() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
     let id = f.add_client();
@@ -84,10 +85,133 @@ fn move_to_snap_docks_at_the_gap_and_stops_when_nothing_is_further() {
     act(&mut f, Action::MoveToSnap(Direction::Right));
     assert_eq!(
         window_position(&mut f, &a),
-        Point::from((1412, 100)),
-        "no stop further right: a no-op"
+        Point::from((1432, 100)),
+        "no stop further right: a nudge_step on"
     );
     assert!(f.state().camera_target().is_none());
+}
+
+#[test]
+fn move_to_snap_nudges_a_lone_window_by_nudge_step() {
+    let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 35\n"));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let (a, _) = window_at(&mut f, id, "a", (500, 300), (400, 300));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+
+    for (dir, at) in [
+        (Direction::Right, (535, 300)),
+        (Direction::Down, (535, 335)),
+        (Direction::Left, (500, 335)),
+        (Direction::Up, (500, 300)),
+    ] {
+        act(&mut f, Action::MoveToSnap(dir));
+        assert_eq!(window_position(&mut f, &a), Point::from(at));
+        assert!(
+            f.state().camera_target().is_none(),
+            "still fully in view, so the camera stays"
+        );
+    }
+}
+
+/// A nudge out of view pans the way an edge pan does: just far enough to show
+/// the window whole again, so it rides the usable edge, `outer_gap` in, while
+/// the canvas scrolls under it.
+#[test]
+fn move_to_snap_nudging_out_of_view_pans_just_enough() {
+    let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 35\n"));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    // The right edge at 1898, 22 px in from the usable edge.
+    let (a, _) = window_at(&mut f, id, "a", (1498, 100), (400, 300));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+    let usable = f.state().get_usable_area();
+    let riding = (usable.loc.x + usable.size.w) as f64 - f.state().config.snap_outer_gap;
+    let right_on_screen = |f: &mut Fixture| {
+        let rect = f
+            .state()
+            .visual_frame_rect(&StageWindow::Client(a.clone()))
+            .unwrap();
+        (rect.x_high - f.state().camera().x) * f.state().zoom()
+    };
+
+    act(&mut f, Action::MoveToSnap(Direction::Right));
+    assert_eq!(window_position(&mut f, &a), Point::from((1533, 100)));
+    settle(&mut f);
+    assert_eq!(right_on_screen(&mut f), riding, "outer_gap in, not centred");
+    assert_eq!(f.state().camera(), Point::from((25.0, 0.0)));
+    assert_eq!(f.state().zoom(), 1.0);
+
+    for camera_x in [60.0, 95.0] {
+        act(&mut f, Action::MoveToSnap(Direction::Right));
+        settle(&mut f);
+        assert_eq!(
+            f.state().camera(),
+            Point::from((camera_x, 0.0)),
+            "the camera moves by the step"
+        );
+        assert_eq!(
+            right_on_screen(&mut f),
+            riding,
+            "the window stays put on screen"
+        );
+    }
+
+    // A held key: each repeat lands before the previous pan has.
+    act(&mut f, Action::MoveToSnap(Direction::Right));
+    f.state().apply_zoom_animation(TICK);
+    f.state().apply_camera_animation(TICK);
+    act(&mut f, Action::MoveToSnap(Direction::Right));
+    settle(&mut f);
+    assert_eq!(f.state().camera(), Point::from((165.0, 0.0)));
+    assert_eq!(right_on_screen(&mut f), riding);
+    assert_eq!(f.state().zoom(), 1.0);
+}
+
+/// `nudge_step` takes any non-negative `i32`, so the nudged position has to
+/// saturate rather than wrap.
+#[test]
+fn a_pathological_nudge_step_does_not_overflow_move_to_snap() {
+    let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 2147483647\n"));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let (a, _) = window_at(&mut f, id, "a", (100, -100), (400, 300));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+
+    act(&mut f, Action::MoveToSnap(Direction::Right));
+    act(&mut f, Action::MoveToSnap(Direction::Up));
+    assert_eq!(
+        window_position(&mut f, &a),
+        Point::from((i32::MAX, i32::MIN))
+    );
+}
+
+/// `nudge_step = 0` is a no-op through `move-to-snap` too: nothing moves and
+/// nothing is queued for the session file.
+#[test]
+fn a_zero_nudge_step_leaves_move_to_snap_with_no_stop_alone() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 0\n"));
+    f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    let id = f.add_client();
+    let (a, _) = window_at(&mut f, id, "a", (500, 300), (400, 300));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+    f.state().session_store_write_now();
+
+    act(&mut f, Action::MoveToSnap(Direction::Right));
+    assert_eq!(window_position(&mut f, &a), Point::from((500, 300)));
+    assert!(!f.state().session_store_dirty());
+
+    // The step is zero, not the action unreachable.
+    f.state().config.nudge_step = 20;
+    act(&mut f, Action::MoveToSnap(Direction::Right));
+    assert_eq!(window_position(&mut f, &a), Point::from((520, 300)));
+    f.state().session_store_write_now();
 }
 
 /// The alignments are reachable with `[snap] corners` and `centers` off: those
