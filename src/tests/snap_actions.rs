@@ -86,7 +86,7 @@ fn move_to_snap_docks_at_the_gap_and_nudges_when_nothing_is_further() {
     assert_eq!(
         window_position(&mut f, &a),
         Point::from((1432, 100)),
-        "no stop further right: a nudge_step on"
+        "no stop further right: nudged by nudge_step"
     );
     assert!(f.state().camera_target().is_none());
 }

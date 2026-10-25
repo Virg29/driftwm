@@ -769,8 +769,8 @@ mod tests {
         assert_eq!(next_origin(288.0, false, 200.0, &others, &q), None);
     }
 
-    /// At zero gap the docks are flush, and a window it only touches doesn't
-    /// block one: the far dock past the furthest window ahead is always clear.
+    /// At zero gap a dock sits flush, and touching a window isn't landing on
+    /// it: the far dock past the furthest window ahead stays clear.
     #[test]
     fn a_move_at_zero_gap_docks_flush_against_a_window_it_touches() {
         let others = [rect(200.0, 50.0, 200.0, 100.0)];

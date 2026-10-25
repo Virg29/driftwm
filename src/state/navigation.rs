@@ -144,8 +144,8 @@ impl DriftWm {
     }
 
     /// Focus + raise `element` and pan the active output's view from `camera`
-    /// at `zoom` by the least amount that shows `frame`, the element's frame,
-    /// whole, `outer_gap` in from the usable edge.
+    /// at `zoom` by the least amount that shows the element's `frame` whole,
+    /// `outer_gap` in from the usable edge.
     pub(super) fn pan_minimally_to_element(
         &mut self,
         element: &StageWindow,
