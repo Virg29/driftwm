@@ -1028,6 +1028,12 @@ mod tests {
             .prop_map(|(x, y, w, h)| rect(x, y, w, h))
     }
 
+    /// Every frame the compositor builds sits on whole pixels.
+    fn any_whole_rect() -> impl Strategy<Value = SnapRect> {
+        (-1000..1000i32, -1000..1000i32, 20..600i32, 20..600i32)
+            .prop_map(|(x, y, w, h)| rect(x as f64, y as f64, w as f64, h as f64))
+    }
+
     proptest! {
         /// The walk's ordering: it lands on an enumerated stop strictly
         /// beyond its origin, clear of every window it wasn't already over,
@@ -1064,6 +1070,38 @@ mod tests {
                 }
                 None => prop_assert!(origins.iter().all(|&c| !open(c))),
             }
+        }
+
+        /// On whole pixels, a move finds no clear stop only when it finds no
+        /// stop at all: the window reaching furthest that way across the
+        /// perpendicular span always offers a clear far dock. So a nudge any
+        /// whole distance that way lands on no window.
+        #[test]
+        fn next_origin_finds_no_stop_only_with_nothing_ahead_on_whole_pixels(
+            from in -1000..1000i32,
+            forward in any::<bool>(),
+            extent in 20..600i32,
+            others in prop::collection::vec(any_whole_rect(), 0..6),
+            gap in 0.0..50.0f64,
+            side_docks in any::<bool>(),
+            nudge in 1..5000i32,
+        ) {
+            let (from, extent) = (from as f64, extent as f64);
+            let q = StopQuery { gap, align_band: gap + 24.0, side_docks, ..query(true) };
+            if next_origin(from, forward, extent, &others, &q).is_some() {
+                return Ok(());
+            }
+
+            let beyond = |o: f64| if forward { o - from > ON_STOP } else { from - o > ON_STOP };
+            let any_beyond = stops(&others, &q)
+                .any(|s| beyond((s.at - origin_shift(s.line, extent)).round()));
+            prop_assert!(!any_beyond);
+
+            let frame = |o: f64| rect(o, q.perp_low, extent, q.perp_high - q.perp_low);
+            let nudged = frame(if forward { from + nudge as f64 } else { from - nudge as f64 });
+            let lands_on_a_window =
+                others.iter().any(|n| nudged.overlaps(n) && !frame(from).overlaps(n));
+            prop_assert!(!lands_on_a_window);
         }
 
         /// A grow never covers a window the frame wasn't already over, even
