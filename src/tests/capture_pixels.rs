@@ -8,6 +8,7 @@
 //! takes [`gl::lock`] first.
 
 use smithay::output::Output;
+use smithay::utils::{Logical, Physical, Rectangle, Size, Transform};
 use wayland_client::protocol::wl_shm::Format;
 use wayland_protocols::ext::image_copy_capture::v1::client::ext_image_copy_capture_frame_v1::FailureReason;
 use wayland_protocols_wlr::screencopy::v1::client::zwlr_screencopy_frame_v1::ZwlrScreencopyFrameV1;
@@ -139,24 +140,43 @@ fn slack_untouched(bytes: &[u8], offset: usize, stride: usize, (w, h): (i32, i32
     })
 }
 
-#[test]
-#[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
-fn a_wlr_region_capture_shows_that_region_of_the_output() {
+/// Capture [`REGION`] and the whole output over wlr-screencopy, on an output
+/// at `scale` turned by `transform`, and check the region's buffer is the
+/// stretch of the whole output's buffer the region covers. Both buffers are
+/// in scanout orientation, so the stretch is the region turned back.
+fn region_capture_matches_the_output(test: &str, scale: f64, transform: Transform) {
     let _gl = gl::lock();
-    let Some((mut f, output, client)) = setup("wlr region capture") else {
+    let Some(renderer) = gl::surfaceless_renderer(test) else {
         return;
     };
+    let mut f = Fixture::with_config(super::config(CONFIG));
+    let output = f.add_output_scaled(1, OUTPUT, scale);
+    output.change_current_state(None, Some(transform), None, None);
+    gl::install(&mut f, renderer);
+    let client = f.add_client();
+    map_gradient_window(&mut f, client);
+    super::tick_until_settled(&mut f);
     let name = output.name();
+
+    let mode = Size::<i32, Physical>::from((i32::from(OUTPUT.0), i32::from(OUTPUT.1)));
+    let turned = transform.transform_size(mode);
+    let (x, y, w, h) = REGION;
+    let in_output = Rectangle::<i32, Logical>::new((x, y).into(), (w, h).into())
+        .to_physical_precise_round(scale)
+        .intersection(Rectangle::from_size(turned))
+        .expect("the region is on the output");
+    let scanout = transform.invert().transform_rect_in(in_output, &turned);
 
     let globals = f.client(client).bind_capture_globals();
     f.roundtrip(client);
     let (full, full_record) = f.client(client).wlr_capture(&globals, &name, None);
     let (region, region_record) = f.client(client).wlr_capture(&globals, &name, Some(REGION));
     f.roundtrip(client);
+    let size = (scanout.size.w, scanout.size.h);
     assert_eq!(
         wlr_params(&region_record),
-        (REGION.2, REGION.3, REGION.2 * 4),
-        "a scale-1 region asks for a buffer of its own size"
+        (size.0, size.1, size.0 * 4),
+        "the region asks for a buffer of its own size"
     );
     let full_buffer = wlr_copy(&mut f, client, &full, &full_record, 0, 0);
     let region_buffer = wlr_copy(&mut f, client, &region, &region_record, 0, 0);
@@ -172,26 +192,47 @@ fn a_wlr_region_capture_shows_that_region_of_the_output() {
         "the region capture completed"
     );
 
-    let out = (i32::from(OUTPUT.0), i32::from(OUTPUT.1));
-    let full_px = rgb_pixels(&full_buffer.pool_bytes(), 0, out.0 as usize * 4, out);
-    let region_px = rgb_pixels(
-        &region_buffer.pool_bytes(),
+    let full_px = rgb_pixels(
+        &full_buffer.pool_bytes(),
         0,
-        REGION.2 as usize * 4,
-        (REGION.2, REGION.3),
+        mode.w as usize * 4,
+        (mode.w, mode.h),
     );
-    let at_origin = crop(&full_px, out.0, (0, 0, REGION.2, REGION.3));
+    let region_px = rgb_pixels(&region_buffer.pool_bytes(), 0, size.0 as usize * 4, size);
+    let stretch = crop(
+        &full_px,
+        mode.w,
+        (scanout.loc.x, scanout.loc.y, size.0, size.1),
+    );
     assert_ne!(
-        crop(&full_px, out.0, REGION),
-        at_origin,
-        "the scenario needs the region to look different from the output's top-left"
+        stretch,
+        crop(&full_px, mode.w, (0, 0, size.0, size.1)),
+        "the scenario needs the region to look different from the buffer's origin"
     );
     assert!(
-        region_px == crop(&full_px, out.0, REGION),
+        region_px == stretch,
         "the region capture holds the output's pixels at the region"
     );
 
     teardown(f, &output);
+}
+
+#[test]
+#[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
+fn a_wlr_region_capture_shows_that_region_of_the_output() {
+    region_capture_matches_the_output("wlr region capture", 1.0, Transform::Normal);
+}
+
+#[test]
+#[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
+fn a_wlr_region_capture_at_a_fractional_scale_shows_that_region() {
+    region_capture_matches_the_output("wlr region at 1.5x", 1.5, Transform::Normal);
+}
+
+#[test]
+#[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
+fn a_wlr_region_capture_on_a_rotated_output_shows_that_region() {
+    region_capture_matches_the_output("wlr region rotated", 1.0, Transform::_90);
 }
 
 #[test]
