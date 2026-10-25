@@ -19,7 +19,7 @@ use wayland_protocols::ext::image_capture_source::v1::client::{
 };
 use wayland_protocols::ext::image_copy_capture::v1::client::{
     ext_image_copy_capture_frame_v1::{self, ExtImageCopyCaptureFrameV1},
-    ext_image_copy_capture_manager_v1::ExtImageCopyCaptureManagerV1,
+    ext_image_copy_capture_manager_v1::{self, ExtImageCopyCaptureManagerV1},
     ext_image_copy_capture_session_v1::{self, ExtImageCopyCaptureSessionV1},
 };
 use wayland_protocols_wlr::screencopy::v1::client::{
@@ -131,6 +131,49 @@ impl Client {
             _pool: pool,
             buffer,
         }
+    }
+
+    /// An ext-image-copy-capture session on `output`, without cursors. Its
+    /// buffer constraints arrive on the next roundtrip.
+    pub fn ext_capture_session(
+        &mut self,
+        globals: &Globals,
+        output: &str,
+    ) -> (ExtImageCopyCaptureSessionV1, Record) {
+        let output = self.output_named(output);
+        let globals = globals.lock().unwrap();
+        let sources = globals
+            .output_sources
+            .as_ref()
+            .expect("ext output capture sources bound");
+        let manager = globals
+            .image_copy
+            .as_ref()
+            .expect("ext-image-copy-capture bound");
+        let source = sources.create_source(&output, &self.qh, ());
+        let record = Record::default();
+        let session = manager.create_session(
+            &source,
+            ext_image_copy_capture_manager_v1::Options::empty(),
+            &self.qh,
+            record.clone(),
+        );
+        source.destroy();
+        (session, record)
+    }
+
+    /// Capture one frame of `session` into `buffer`.
+    pub fn ext_capture(
+        &mut self,
+        session: &ExtImageCopyCaptureSessionV1,
+        buffer: &WlBuffer,
+    ) -> (ExtImageCopyCaptureFrameV1, Record) {
+        let record = Record::default();
+        let frame = session.create_frame(&self.qh, record.clone());
+        frame.attach_buffer(buffer);
+        frame.damage_buffer(0, 0, i32::MAX, i32::MAX);
+        frame.capture();
+        (frame, record)
     }
 }
 

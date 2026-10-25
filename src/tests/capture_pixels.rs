@@ -1,5 +1,7 @@
 //! Screen capture through the wire protocols, rendered by a real GL context:
-//! a wlr-screencopy region shows that region of the output.
+//! a wlr-screencopy region shows that region of the output, and both capture
+//! protocols write a client's shm buffer where the buffer says, at its offset
+//! and stride, failing the frame when the buffer doesn't fit.
 //!
 //! `#[ignore]`d out of the default lane like the other pixel scenarios (needs
 //! Mesa's surfaceless EGL, self-skipping when that is missing); each scenario
@@ -7,6 +9,7 @@
 
 use smithay::output::Output;
 use wayland_client::protocol::wl_shm::Format;
+use wayland_protocols::ext::image_copy_capture::v1::client::ext_image_copy_capture_frame_v1::FailureReason;
 use wayland_protocols_wlr::screencopy::v1::client::zwlr_screencopy_frame_v1::ZwlrScreencopyFrameV1;
 
 use super::capture_client::{CaptureBuffer, Record};
@@ -123,6 +126,19 @@ fn crop(full: &[[u8; 3]], full_w: i32, (x, y, w, h): (i32, i32, i32, i32)) -> Ve
     px
 }
 
+/// Whether every byte outside the `w`x`h` image at `offset`/`stride` still
+/// holds [`FILL`].
+fn slack_untouched(bytes: &[u8], offset: usize, stride: usize, (w, h): (i32, i32)) -> bool {
+    let row_bytes = w as usize * 4;
+    bytes.iter().enumerate().all(|(i, &b)| {
+        let inside = i >= offset && {
+            let (row, col) = ((i - offset) / stride, (i - offset) % stride);
+            row < h as usize && col < row_bytes
+        };
+        inside || b == FILL
+    })
+}
+
 #[test]
 #[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
 fn a_wlr_region_capture_shows_that_region_of_the_output() {
@@ -174,6 +190,154 @@ fn a_wlr_region_capture_shows_that_region_of_the_output() {
         region_px == crop(&full_px, out.0, REGION),
         "the region capture holds the output's pixels at the region"
     );
+
+    teardown(f, &output);
+}
+
+#[test]
+#[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
+fn a_wlr_capture_lands_at_its_buffer_offset_in_a_larger_pool() {
+    let _gl = gl::lock();
+    let Some((mut f, output, client)) = setup("wlr pool offset") else {
+        return;
+    };
+    let name = output.name();
+
+    let globals = f.client(client).bind_capture_globals();
+    f.roundtrip(client);
+    let (tight, tight_record) = f.client(client).wlr_capture(&globals, &name, Some(REGION));
+    let (placed, placed_record) = f.client(client).wlr_capture(&globals, &name, Some(REGION));
+    f.roundtrip(client);
+    let tight_buffer = wlr_copy(&mut f, client, &tight, &tight_record, 0, 0);
+    let placed_buffer = wlr_copy(&mut f, client, &placed, &placed_record, 256, 64);
+    f.roundtrip(client);
+    render_captures(&mut f, &output);
+    f.roundtrip(client);
+    assert!(
+        placed_record.lock().unwrap().ready,
+        "the offset capture completed"
+    );
+
+    let size = (REGION.2, REGION.3);
+    let stride = REGION.2 as usize * 4;
+    let bytes = placed_buffer.pool_bytes();
+    assert_eq!(
+        rgb_pixels(&bytes, 256, stride, size),
+        rgb_pixels(&tight_buffer.pool_bytes(), 0, stride, size),
+        "the capture starts at the buffer's offset"
+    );
+    assert!(
+        slack_untouched(&bytes, 256, stride, size),
+        "nothing outside the buffer was written"
+    );
+
+    teardown(f, &output);
+}
+
+#[test]
+#[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
+fn an_ext_capture_follows_the_buffers_offset_and_stride() {
+    let _gl = gl::lock();
+    let Some((mut f, output, client)) = setup("ext offset and stride") else {
+        return;
+    };
+    let name = output.name();
+
+    let globals = f.client(client).bind_capture_globals();
+    f.roundtrip(client);
+    let (reference, reference_record) = f.client(client).wlr_capture(&globals, &name, None);
+    let (session, session_record) = f.client(client).ext_capture_session(&globals, &name);
+    f.roundtrip(client);
+    let (w, h, _) = session_record
+        .lock()
+        .unwrap()
+        .shm
+        .expect("the session announced its buffer size");
+    let reference_buffer = wlr_copy(&mut f, client, &reference, &reference_record, 0, 0);
+
+    // A padded layout in a pool with slack on both sides, in Argb8888: the
+    // other format the session advertises.
+    let (offset, stride) = (128, w * 4 + 64);
+    let pool_len = (offset + stride * h) as usize + 32;
+    let buffer =
+        f.client(client)
+            .capture_buffer(Format::Argb8888, (w, h), stride, offset, pool_len, FILL);
+    let (_frame, frame_record) = f.client(client).ext_capture(&session, &buffer.buffer);
+    f.roundtrip(client);
+    render_captures(&mut f, &output);
+    f.roundtrip(client);
+    assert!(
+        frame_record.lock().unwrap().ready,
+        "the ext capture completed"
+    );
+
+    let bytes = buffer.pool_bytes();
+    let (offset, stride) = (offset as usize, stride as usize);
+    assert!(
+        rgb_pixels(&bytes, offset, stride, (w, h))
+            == rgb_pixels(&reference_buffer.pool_bytes(), 0, w as usize * 4, (w, h)),
+        "each row lands at offset + row * stride"
+    );
+    assert!(
+        slack_untouched(&bytes, offset, stride, (w, h)),
+        "row padding and pool slack stay untouched"
+    );
+
+    teardown(f, &output);
+}
+
+#[test]
+#[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
+fn an_ext_capture_into_a_buffer_that_does_not_fit_fails_on_constraints() {
+    let _gl = gl::lock();
+    let Some((mut f, output, client)) = setup("ext buffer constraints") else {
+        return;
+    };
+    let name = output.name();
+
+    let globals = f.client(client).bind_capture_globals();
+    f.roundtrip(client);
+    // A session each, so neither frame waits on damage behind the other.
+    let (narrow_session, session_record) = f.client(client).ext_capture_session(&globals, &name);
+    let (foreign_session, _) = f.client(client).ext_capture_session(&globals, &name);
+    f.roundtrip(client);
+    let (w, h, _) = session_record.lock().unwrap().shm.unwrap();
+
+    // One texel too narrow, and a format wl_shm takes but the session never
+    // advertised.
+    let pool_len = (w * 4 * h) as usize;
+    let narrow =
+        f.client(client)
+            .capture_buffer(Format::Xrgb8888, (w - 1, h), w * 4, 0, pool_len, FILL);
+    let foreign =
+        f.client(client)
+            .capture_buffer(Format::Abgr8888, (w, h), w * 4, 0, pool_len, FILL);
+    let (_narrow_frame, narrow_record) = f
+        .client(client)
+        .ext_capture(&narrow_session, &narrow.buffer);
+    let (_foreign_frame, foreign_record) = f
+        .client(client)
+        .ext_capture(&foreign_session, &foreign.buffer);
+    f.roundtrip(client);
+    render_captures(&mut f, &output);
+    f.roundtrip(client);
+
+    for (what, record, buffer) in [
+        ("too narrow", &narrow_record, &narrow),
+        ("unadvertised format", &foreign_record, &foreign),
+    ] {
+        let record = record.lock().unwrap();
+        assert!(!record.ready, "a {what} buffer is not reported ready");
+        assert_eq!(
+            record.failure_reason,
+            Some(FailureReason::BufferConstraints),
+            "a {what} buffer fails on its constraints"
+        );
+        assert!(
+            buffer.pool_bytes().iter().all(|&b| b == FILL),
+            "nothing is written into a {what} buffer"
+        );
+    }
 
     teardown(f, &output);
 }
