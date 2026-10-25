@@ -1,6 +1,6 @@
 //! The IPC socket under clients that misbehave: one streaming requests is
-//! served a read at a time so the loop keeps turning, and connections past
-//! the cap are dropped as soon as they are accepted.
+//! served a read at a time so the loop keeps turning, and a connection past
+//! the cap is told so and closed as soon as it is accepted.
 
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -33,22 +33,25 @@ fn replies_ready(stream: &mut UnixStream) -> usize {
     count
 }
 
-/// Whether the server closed `stream`, pumping until it says either way.
-fn closed_by_server(f: &mut Fixture, stream: &mut UnixStream) -> bool {
+/// Everything the server sent on `stream` before closing it, or `None` if it
+/// kept the connection open.
+fn sent_before_close(f: &mut Fixture, stream: &mut UnixStream) -> Option<String> {
     stream
         .set_read_timeout(Some(Duration::from_millis(10)))
         .unwrap();
+    let mut sent = Vec::new();
+    let mut buf = [0u8; 256];
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
         f.pump(1);
-        match stream.read(&mut [0u8; 64]) {
-            Ok(0) => return true,
-            Ok(_) => return false,
+        match stream.read(&mut buf) {
+            Ok(0) => return Some(String::from_utf8_lossy(&sent).into_owned()),
+            Ok(n) => sent.extend_from_slice(&buf[..n]),
             Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
-            Err(_) => return true,
+            Err(_) => return Some(String::from_utf8_lossy(&sent).into_owned()),
         }
     }
-    false
+    None
 }
 
 /// Send one request on `stream` and wait for its reply.
@@ -123,9 +126,11 @@ fn connections_past_the_cap_are_dropped_and_a_freed_slot_is_reused() {
     );
 
     let mut over = connect(&ipc);
+    let refusal =
+        sent_before_close(&mut f, &mut over).expect("a connection past the cap is closed");
     assert!(
-        closed_by_server(&mut f, &mut over),
-        "a connection past the cap is closed"
+        refusal.contains("connections are already open"),
+        "it is told why first: {refusal:?}"
     );
 
     drop(held.pop());

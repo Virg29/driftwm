@@ -101,7 +101,7 @@ impl IpcServer {
                         tracing::debug!(
                             "IPC: {MAX_CONNECTIONS} connections open, closing a new one"
                         );
-                        drop(stream);
+                        refuse_connection(stream);
                     }
                     Ok((stream, _)) => accept_client(state, stream, slots.clone()),
                     Err(e) if e.kind() == ErrorKind::WouldBlock => break,
@@ -124,6 +124,20 @@ impl Drop for IpcServer {
     fn drop(&mut self) {
         std::fs::remove_file(&self.socket_path).ok();
         tracing::debug!("IPC socket cleaned up");
+    }
+}
+
+/// Tell a connection past the cap why it is closed, so `driftwm msg` reports
+/// more than a missing reply. Never blocks: a fresh socket takes one short
+/// line, and a write that fails anyway changes nothing.
+fn refuse_connection(stream: UnixStream) {
+    let _ = stream.set_nonblocking(true);
+    let reply: Reply = Err(format!(
+        "{MAX_CONNECTIONS} IPC connections are already open"
+    ));
+    if let Ok(mut line) = serde_json::to_vec(&reply) {
+        line.push(b'\n');
+        let _ = (&stream).write_all(&line);
     }
 }
 
