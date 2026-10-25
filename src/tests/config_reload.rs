@@ -284,3 +284,22 @@ size = [640, 480]
         "a window mapped after the reload must receive the rule size, got:\n{fresh_configures}"
     );
 }
+
+#[test]
+fn reload_keeps_the_displays_children_are_pointed_at() {
+    let mut f = Fixture::new();
+    // Set at startup outside the config, so the rebuilt child env lacks them.
+    let env = &mut f.state().config.child_env;
+    env.insert("WAYLAND_DISPLAY".into(), "wayland-7".into());
+    env.insert("DISPLAY".into(), ":3".into());
+
+    f.state()
+        .reload_config_from_contents("[navigation]\ndrift = 0.5\n");
+
+    let env = &f.state().config.child_env;
+    assert_eq!(
+        env.get("WAYLAND_DISPLAY").map(String::as_str),
+        Some("wayland-7")
+    );
+    assert_eq!(env.get("DISPLAY").map(String::as_str), Some(":3"));
+}
