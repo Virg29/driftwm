@@ -19,7 +19,10 @@ use smithay::{
     wayland::seat::WaylandFocus,
 };
 
-use super::{DriftWm, PendingClickNavigate, PendingPick, PickTarget, StageWindow, output_state};
+use super::{
+    DriftWm, PendingClickNavigate, PendingPick, PickTarget, StageWindow, ZoomAnimationAnchor,
+    output_state,
+};
 
 /// Max pointer travel (screen px) between press and release for a click to
 /// still count as a click rather than a drag. Beyond it, no auto-navigate — a
@@ -97,7 +100,8 @@ pub enum RevealPan {
 }
 
 /// The axes an in-view test judges a frame along, and a minimal pan moves the
-/// camera along; a pan along one keeps the camera's coordinate on the other.
+/// camera along; a pan along one leaves the camera's course on the other as
+/// it was.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Axes {
     Both,
@@ -152,8 +156,9 @@ impl DriftWm {
     }
 
     /// Focus + raise `element` and pan the active output's view from `camera`
-    /// at `zoom` by the least amount that shows the element's `frame` whole
-    /// along `axes`, `outer_gap` in from the usable edge.
+    /// at `zoom`, where any flight under way lands, by the least amount that
+    /// shows the element's `frame` whole along `axes`, `outer_gap` in from the
+    /// usable edge.
     pub(super) fn pan_minimally_to_element(
         &mut self,
         element: &StageWindow,
@@ -178,13 +183,8 @@ impl DriftWm {
         // which would leave the revealed frame clipped.
         let border = self.element_chrome(element).border;
         let inset = self.config.outer_frame_inset(border).max(0.0);
-        let mut target =
+        let target =
             minimal_reveal_camera(frame, camera, zoom, self.usable_area_on(&output), inset);
-        match axes {
-            Axes::Both => {}
-            Axes::Only { horizontal: true } => target.y = camera.y,
-            Axes::Only { horizontal: false } => target.x = camera.x,
-        }
 
         // Through the anchor, not a bare `camera_target`: an anchor still armed
         // by the previous pan would steer the camera back every tick.
@@ -194,7 +194,36 @@ impl DriftWm {
         ));
         let center_screen =
             Point::from(((center.x - target.x) * zoom, (center.y - target.y) * zoom));
-        self.set_camera_anchor(&output, center, center_screen, zoom);
+        let (anchor, anchor_screen) = match axes {
+            Axes::Both => (center, center_screen),
+            Axes::Only { horizontal } => {
+                // The held axis keeps the anchor a flight under way steers by,
+                // and so its course: the frame may lie far off screen along
+                // that axis, and steering by it there would swing the camera
+                // with whatever zoom is left to fly. Every zoom flight arms an
+                // anchor, so with none the zoom holds and the camera's own
+                // origin serves.
+                let held =
+                    output_state(&output)
+                        .zoom_animation_anchor
+                        .unwrap_or(ZoomAnimationAnchor {
+                            canvas: camera,
+                            screen: Point::from((0.0, 0.0)),
+                        });
+                if horizontal {
+                    (
+                        Point::from((center.x, held.canvas.y)),
+                        Point::from((center_screen.x, held.screen.y)),
+                    )
+                } else {
+                    (
+                        Point::from((held.canvas.x, center.y)),
+                        Point::from((held.screen.x, center_screen.y)),
+                    )
+                }
+            }
+        };
+        self.set_camera_anchor(&output, anchor, anchor_screen, zoom);
     }
 
     /// The frame a minimal reveal brings into view: sized as configured, not

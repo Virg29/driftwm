@@ -12,7 +12,7 @@ use wayland_client::protocol::wl_surface::WlSurface as ClientSurface;
 use super::client::ClientId;
 use super::real::TempDir;
 use super::{
-    Fixture, TICK, ack_but_keep_size, ack_with_size, config, configure_count, give_ssd,
+    Fixture, MAX_TICKS, TICK, ack_but_keep_size, ack_with_size, config, configure_count, give_ssd,
     last_configured, map_window, map_window_with_limits, settle, window_by_app_id, window_position,
 };
 use crate::state::StageWindow;
@@ -359,6 +359,50 @@ fn move_to_snap_nudging_out_of_view_mid_pan_down_lands_the_pan_where_it_was_head
     act(&mut f, Action::MoveToSnap(Direction::Right));
     settle(&mut f);
     assert_eq!(f.state().camera(), Point::from((25.0, 100.0)));
+}
+
+/// A nudge during a zoom keeps the zoom's course across the move, not only
+/// its landing: down the screen the zoom reset goes on holding the canvas
+/// point at the view's centre. The window lies far below the view, and
+/// steering the camera by it there would swing the view past the landing and
+/// back as the zoom finishes.
+#[test]
+fn move_to_snap_nudging_out_of_view_mid_zoom_keeps_the_zoom_on_course_down() {
+    let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 35\n"));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    // The zoom reset lands the view on x 960..2880; nudged, the frame ends at
+    // 2885.
+    let (a, _) = window_at(&mut f, id, "a", (2450, 6000), (400, 300));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+    f.state().with_output_state(|os| os.zoom = 0.5);
+    act(&mut f, Action::ZoomReset);
+    let (landing, _) = f.state().landing_view();
+    f.state().apply_zoom_animation(TICK);
+    f.state().apply_camera_animation(TICK);
+    assert!(
+        f.state().zoom() < 1.0,
+        "precondition: the zoom is under way"
+    );
+
+    let centre_y = f.state().viewport_center_canvas().y;
+
+    act(&mut f, Action::MoveToSnap(Direction::Right));
+    for _ in 0..MAX_TICKS {
+        if f.state().zoom_target().is_none() {
+            break;
+        }
+        f.state().apply_zoom_animation(TICK);
+        f.state().apply_camera_animation(TICK);
+        let y = f.state().viewport_center_canvas().y;
+        assert!(
+            (y - centre_y).abs() < 1e-9,
+            "the view's centre stays at canvas y {centre_y}: {y}"
+        );
+    }
+    assert_eq!(f.state().camera(), Point::from((977.0, landing.y)));
+    assert_eq!(f.state().zoom(), 1.0);
 }
 
 /// `nudge_step` takes any non-negative `i32`, so the nudged position has to
