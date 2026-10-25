@@ -607,7 +607,7 @@ impl DriftWm {
         // Update content caches only after a successful atomic rename, so a
         // transient FS error gets retried on the next call instead of being
         // silently swallowed.
-        if std::fs::write(&tmp, content).is_ok() && std::fs::rename(&tmp, &path).is_ok() {
+        if driftwm::session::write_private(&tmp, &path, content.as_bytes(), false).is_ok() {
             self.state_file_layer_count = layers.len();
             for output in self.space.outputs() {
                 let os = output_state(output);
