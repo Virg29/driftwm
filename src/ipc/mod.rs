@@ -132,48 +132,49 @@ fn accept_client(state: &mut DriftWm, stream: UnixStream) {
     }
 }
 
-/// Drain everything readable, answering each complete `\n`-terminated command.
+/// Read once, answering each complete `\n`-terminated command the buffer then
+/// holds. The source is level-triggered, so anything still unread brings the
+/// callback back on the next turn of the loop, and a client streaming requests
+/// can't keep the loop here.
 fn serve_connection(
     mut stream: &UnixStream,
     buffer: &mut Vec<u8>,
     state: &mut DriftWm,
 ) -> PostAction {
     let mut chunk = [0u8; 1024];
-    loop {
-        match stream.read(&mut chunk) {
-            Ok(0) => return disconnect(stream, state), // EOF
-            Ok(n) => {
-                buffer.extend_from_slice(&chunk[..n]);
-                if buffer.len() > MAX_COMMAND_SIZE {
-                    tracing::warn!("IPC command too large, disconnecting");
-                    return disconnect(stream, state);
-                }
-                while let Some(nl) = buffer.iter().position(|&b| b == b'\n') {
-                    let line: Vec<u8> = buffer.drain(..=nl).collect();
-                    // A half-written pushed event must be flushed before any
-                    // reply, or the reply lands mid-line and corrupts framing.
-                    if flush_pending_events(stream, state).is_err() {
-                        return disconnect(stream, state);
-                    }
-                    let written = match serde_json::from_slice::<Request>(&line[..nl]) {
-                        // Needs the raw stream to register a push channel, so it's
-                        // handled here rather than through the stream-less dispatch.
-                        Ok(Request::Subscribe) => subscribe(stream, state),
-                        Ok(request) => write_reply(stream, &dispatch(request, state)),
-                        Err(e) => write_reply(stream, &Err(format!("invalid request: {e}"))),
-                    };
-                    if written.is_err() {
-                        return disconnect(stream, state);
-                    }
-                }
-            }
-            Err(e) if e.kind() == ErrorKind::WouldBlock => return PostAction::Continue,
-            Err(e) => {
-                tracing::warn!("IPC read error: {e}");
-                return disconnect(stream, state);
-            }
+    let n = match stream.read(&mut chunk) {
+        Ok(0) => return disconnect(stream, state), // EOF
+        Ok(n) => n,
+        Err(e) if e.kind() == ErrorKind::WouldBlock => return PostAction::Continue,
+        Err(e) => {
+            tracing::warn!("IPC read error: {e}");
+            return disconnect(stream, state);
+        }
+    };
+    buffer.extend_from_slice(&chunk[..n]);
+    if buffer.len() > MAX_COMMAND_SIZE {
+        tracing::warn!("IPC command too large, disconnecting");
+        return disconnect(stream, state);
+    }
+    while let Some(nl) = buffer.iter().position(|&b| b == b'\n') {
+        let line: Vec<u8> = buffer.drain(..=nl).collect();
+        // A half-written pushed event must be flushed before any
+        // reply, or the reply lands mid-line and corrupts framing.
+        if flush_pending_events(stream, state).is_err() {
+            return disconnect(stream, state);
+        }
+        let written = match serde_json::from_slice::<Request>(&line[..nl]) {
+            // Needs the raw stream to register a push channel, so it's
+            // handled here rather than through the stream-less dispatch.
+            Ok(Request::Subscribe) => subscribe(stream, state),
+            Ok(request) => write_reply(stream, &dispatch(request, state)),
+            Err(e) => write_reply(stream, &Err(format!("invalid request: {e}"))),
+        };
+        if written.is_err() {
+            return disconnect(stream, state);
         }
     }
+    PostAction::Continue
 }
 
 /// Tear down a connection, forgetting its subscription. Must run while the

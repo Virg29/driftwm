@@ -52,6 +52,7 @@ mod interact_min;
 mod ipc_bounds;
 mod ipc_cursor;
 mod ipc_focus;
+mod ipc_socket;
 mod layer_bindings;
 mod layer_destroy_focus;
 mod layer_frame_gating;
