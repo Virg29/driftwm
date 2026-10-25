@@ -14,7 +14,7 @@ impl DriftWm {
     /// Move the focused canvas element along `dir` to the nearest stop past
     /// where it sits, and bring the camera along if that leaves the viewport.
     /// With no stop that way it nudges by `nudge_step` instead, the camera
-    /// panning along the move just enough to show it that way.
+    /// panning just enough to show it along the move.
     pub(crate) fn move_to_snap_focused(&mut self, dir: &Direction) {
         let Some((horizontal, forward)) = axis_of(dir) else {
             return;
@@ -78,10 +78,10 @@ impl DriftWm {
             return;
         }
         // As an edge pan carries a dragged window: it rides the usable edge
-        // while the canvas scrolls under it, where parking every step would
-        // throw the view around, and the canvas scrolls only the way the
-        // window went. Shown at the size just judged, which a client that
-        // declined a resize is still drawn at.
+        // while the canvas scrolls under it, only the way the window went,
+        // where parking every step would throw the view around. Shown at the
+        // size just judged, which a client that declined a resize is still
+        // drawn at.
         let along = Axes::Only { horizontal };
         if !self.frame_fully_in_view_at(&landed, camera, zoom, along) {
             self.pan_minimally_to_element(&element, &landed, camera, zoom, along);

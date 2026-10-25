@@ -335,7 +335,7 @@ fn move_to_snap_nudging_out_of_view_leaves_a_clip_at_the_bottom() {
     assert_eq!(rect.y_high, 1200.0, "still clipped at the bottom");
 }
 
-/// A nudge during a flight across its axis leaves that flight's heading
+/// A nudge during a flight perpendicular to it leaves that flight's heading
 /// alone: a pan down lands where it was going even though the window it
 /// reveals across is clipped at the bottom there.
 #[test]
@@ -363,9 +363,7 @@ fn move_to_snap_nudging_out_of_view_mid_pan_down_lands_the_pan_where_it_was_head
 
 /// A nudge during a zoom keeps the zoom's course across the move, not only
 /// its landing: down the screen the zoom reset goes on holding the canvas
-/// point at the view's centre. The window lies far below the view, and
-/// steering the camera by it there would swing the view past the landing and
-/// back as the zoom finishes.
+/// point at the view's centre, though the window lies far below the view.
 #[test]
 fn move_to_snap_nudging_out_of_view_mid_zoom_keeps_the_zoom_on_course_down() {
     let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 35\n"));

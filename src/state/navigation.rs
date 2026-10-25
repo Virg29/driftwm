@@ -198,11 +198,10 @@ impl DriftWm {
             Axes::Both => (center, center_screen),
             Axes::Only { horizontal } => {
                 // The held axis keeps the anchor a flight under way steers by,
-                // and so its course: the frame may lie far off screen along
-                // that axis, and steering by it there would swing the camera
-                // with whatever zoom is left to fly. Every zoom flight arms an
-                // anchor, so with none the zoom holds and the camera's own
-                // origin serves.
+                // and so its course: steering by a frame lying far off screen
+                // along it would swing the camera with whatever zoom is left
+                // to fly. Every zoom flight arms an anchor, so with none the
+                // zoom holds and the camera's own origin serves.
                 let held =
                     output_state(&output)
                         .zoom_animation_anchor
