@@ -223,20 +223,27 @@ impl DriftWm {
 
         // Through the anchor, not a bare `camera_target`: an anchor still armed
         // by the previous pan would steer the camera back every tick.
-        let center = Point::from((
-            (frame.x_low + frame.x_high) / 2.0,
-            (frame.y_low + frame.y_high) / 2.0,
-        ));
-        let center_screen =
-            Point::from(((center.x - target.x) * zoom, (center.y - target.y) * zoom));
         let (anchor, anchor_screen) = match pan {
-            MinimalPan::Whole => (center, center_screen),
-            MinimalPan::LeadingEdge { horizontal, .. } => {
-                // The held axis keeps the anchor a flight under way steers by,
-                // and so its course: steering by a frame lying far off screen
-                // along it would swing the camera with whatever zoom is left
-                // to fly. Every zoom flight arms an anchor, so with none the
-                // zoom holds and the camera's own origin serves.
+            MinimalPan::Whole => {
+                let center = Point::from((
+                    (frame.x_low + frame.x_high) / 2.0,
+                    (frame.y_low + frame.y_high) / 2.0,
+                ));
+                let center_screen =
+                    Point::from(((center.x - target.x) * zoom, (center.y - target.y) * zoom));
+                (center, center_screen)
+            }
+            MinimalPan::LeadingEdge {
+                horizontal,
+                forward,
+            } => {
+                // Steering by a point lying far off screen along an axis would
+                // swing the camera there with whatever zoom is left to fly. So
+                // the move steers by the leading edge, which lands on screen
+                // however big the frame, and the held axis keeps the anchor a
+                // flight under way steers by, and so its course. Every zoom
+                // flight arms an anchor, so with none the zoom holds and the
+                // camera's own origin serves.
                 let held =
                     output_state(&output)
                         .zoom_animation_anchor
@@ -245,14 +252,16 @@ impl DriftWm {
                             screen: Point::from((0.0, 0.0)),
                         });
                 if horizontal {
+                    let edge = if forward { frame.x_high } else { frame.x_low };
                     (
-                        Point::from((center.x, held.canvas.y)),
-                        Point::from((center_screen.x, held.screen.y)),
+                        Point::from((edge, held.canvas.y)),
+                        Point::from(((edge - target.x) * zoom, held.screen.y)),
                     )
                 } else {
+                    let edge = if forward { frame.y_high } else { frame.y_low };
                     (
-                        Point::from((held.canvas.x, center.y)),
-                        Point::from((held.screen.x, center_screen.y)),
+                        Point::from((held.canvas.x, edge)),
+                        Point::from((held.screen.x, (edge - target.y) * zoom)),
                     )
                 }
             }

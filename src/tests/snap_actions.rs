@@ -518,6 +518,59 @@ fn move_to_snap_nudging_out_of_view_mid_zoom_keeps_the_zoom_on_course_down() {
     assert_eq!(f.state().zoom(), 1.0);
 }
 
+/// Along the move as well, a nudge during a zoom keeps a window far too big
+/// for the view on course: its leading edge closes on the line from inside
+/// and never passes it, though its centre lies off screen. The zoom reset
+/// lands the view on 960..2880 x 540..1620.
+#[test]
+fn move_to_snap_nudging_mid_zoom_never_carries_a_too_big_window_past_the_line() {
+    for (dir, loc) in [
+        (Direction::Right, (-3000, -2000)),
+        (Direction::Left, (900, -2000)),
+        (Direction::Down, (-2000, -4300)),
+        (Direction::Up, (-2000, 500)),
+    ] {
+        let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 35\n"));
+        f.add_output(1, (1920, 1080));
+        let id = f.add_client();
+        let (a, _) = window_at(&mut f, id, "a", loc, (6000, 6000));
+        focus(&mut f, &a);
+        park_view(&mut f, Point::from((0.0, 0.0)));
+        f.state().with_output_state(|os| os.zoom = 0.5);
+        act(&mut f, Action::ZoomReset);
+        f.state().apply_zoom_animation(TICK);
+        f.state().apply_camera_animation(TICK);
+
+        act(&mut f, Action::MoveToSnap(dir.clone()));
+        // How far the leading edge sits inside its line at the landing zoom,
+        // in screen px.
+        let inside = |f: &mut Fixture| {
+            let rect = f
+                .state()
+                .visual_frame_rect(&StageWindow::Client(a.clone()))
+                .unwrap();
+            let (camera, zoom) = (f.state().camera(), f.state().zoom());
+            match dir {
+                Direction::Right => 1908.0 - (rect.x_high - camera.x) * zoom,
+                Direction::Left => (rect.x_low - camera.x) * zoom - 12.0,
+                Direction::Down => 1068.0 - (rect.y_high - camera.y) * zoom,
+                _ => (rect.y_low - camera.y) * zoom - 12.0,
+            }
+        };
+        for _ in 0..MAX_TICKS {
+            if f.state().zoom_target().is_none() {
+                break;
+            }
+            f.state().apply_zoom_animation(TICK);
+            f.state().apply_camera_animation(TICK);
+            let inside = inside(&mut f);
+            assert!(inside > -1e-9, "{dir:?}: {} px past the line", -inside);
+        }
+        assert!(inside(&mut f).abs() < 1e-9, "{dir:?}: lands on the line");
+        assert_eq!(f.state().zoom(), 1.0);
+    }
+}
+
 /// `nudge_step` takes any non-negative `i32`, so the nudged position has to
 /// saturate rather than wrap.
 #[test]
