@@ -29,13 +29,16 @@ use crate::state::{SessionLock, StageWindow};
 
 use super::client::{ClientId, IdleEvent, LockEvent, TouchEvent};
 use super::input_backend::{
-    FakeDevice, pointer_relative_motion, pointer_to, pointer_to_screen, touch_cancel, touch_down,
-    touch_motion, touch_up,
+    FakeDevice, key_press, key_release, pointer_relative_motion, pointer_to, pointer_to_screen,
+    touch_cancel, touch_down, touch_motion, touch_up,
 };
 use super::{
     Fixture, give_ssd, keyboard_focus, map_window, pointer_focus, server_surface, warnings_during,
     window_by_app_id,
 };
+
+/// evdev code of the A key.
+const KEY_A: u32 = 30;
 
 fn origin_view(f: &mut Fixture) {
     f.state().set_camera(Point::from((0.0, 0.0)));
@@ -313,6 +316,81 @@ fn lock_unsets_a_live_keyboard_grab() {
         !f.state().seat.get_keyboard().unwrap().is_grabbed(),
         "a live keyboard grab must not survive lock() — otherwise it would swallow \
          every keypress meant for the lock surface's password prompt"
+    );
+}
+
+/// A keyboard grab that counts the keys it is handed and otherwise passes
+/// focus through — a stand-in for an input method's grab.
+struct CountingKeyboardGrab {
+    keys: std::rc::Rc<std::cell::Cell<usize>>,
+    start: smithay::input::keyboard::GrabStartData<crate::state::DriftWm>,
+}
+
+impl smithay::input::keyboard::KeyboardGrab<crate::state::DriftWm> for CountingKeyboardGrab {
+    fn input(
+        &mut self,
+        _data: &mut crate::state::DriftWm,
+        _handle: &mut smithay::input::keyboard::KeyboardInnerHandle<'_, crate::state::DriftWm>,
+        _keycode: smithay::input::keyboard::Keycode,
+        _state: smithay::backend::input::KeyState,
+        _modifiers: Option<smithay::input::keyboard::ModifiersState>,
+        _serial: smithay::utils::Serial,
+        _time: u32,
+    ) {
+        self.keys.set(self.keys.get() + 1);
+    }
+
+    fn set_focus(
+        &mut self,
+        data: &mut crate::state::DriftWm,
+        handle: &mut smithay::input::keyboard::KeyboardInnerHandle<'_, crate::state::DriftWm>,
+        focus: Option<crate::state::FocusTarget>,
+        serial: smithay::utils::Serial,
+    ) {
+        handle.set_focus(data, focus, serial);
+    }
+
+    fn start_data(&self) -> &smithay::input::keyboard::GrabStartData<crate::state::DriftWm> {
+        &self.start
+    }
+
+    fn unset(&mut self, _data: &mut crate::state::DriftWm) {}
+}
+
+/// `lock()` drops the grab it finds, but an input method may ask for a new one
+/// mid-lock — smithay installs it with no hook to refuse — so a key typed at
+/// the lock screen must still reach no grab, only the lock surface.
+#[test]
+fn a_keyboard_grab_installed_mid_lock_sees_no_keys() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    f.client(id).lock_session();
+    f.roundtrip(id);
+    confirm_lock(&mut f, id, &output);
+    f.client(id).state.keyboard_events.clear();
+
+    let keys = std::rc::Rc::new(std::cell::Cell::new(0));
+    let grab = CountingKeyboardGrab {
+        keys: keys.clone(),
+        start: smithay::input::keyboard::GrabStartData { focus: None },
+    };
+    let keyboard = f.state().seat.get_keyboard().unwrap();
+    let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+    keyboard.set_grab(f.state(), grab, serial);
+
+    key_press(&mut f, KEY_A);
+    key_release(&mut f, KEY_A);
+    f.roundtrip(id);
+
+    assert_eq!(keys.get(), 0, "no grab may see a key typed while locked");
+    assert!(
+        f.client(id)
+            .state
+            .keyboard_events
+            .iter()
+            .any(|e| matches!(e, super::client::KeyboardEvent::Key { .. })),
+        "the key reaches the lock surface"
     );
 }
 
