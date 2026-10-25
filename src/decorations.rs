@@ -151,13 +151,10 @@ pub const MAX_BUFFER_EXTENT: i32 = 16384;
 /// allow a gigabyte; past this it renders at a lower resolution instead.
 const MAX_BODY_FILL_PIXELS: f64 = 4096.0 * 4096.0;
 
-/// `logical` px at buffer scale `s` as a buffer side, clamped to
-/// `1..=MAX_BUFFER_EXTENT`.
 fn buffer_extent(logical: i32, s: i32) -> i32 {
     logical.max(1).saturating_mul(s).min(MAX_BUFFER_EXTENT)
 }
 
-/// Byte length of a `w`x`h` RGBA buffer.
 fn rgba_len(w: i32, h: i32) -> usize {
     usize::try_from(w)
         .ok()

@@ -180,9 +180,8 @@ fn quit_serialize_round_trip() {
     }
 }
 
-/// A stand-in can outgrow its cap after it was clamped (a snap past the
-/// clamp, a reload that thickened its chrome). Saved past the cap, the next
-/// boot would drop it, so the record is cut to the cap at its top-left.
+/// A stand-in that outgrew its cap is saved cut to the cap at its top-left,
+/// since the next boot drops an entry past it.
 #[test]
 fn a_stand_in_past_the_cap_is_saved_at_the_cap() {
     let tmp = TempDir::new();

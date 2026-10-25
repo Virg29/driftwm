@@ -662,8 +662,8 @@ fn a_sandboxed_app_holding_the_keyboard_activates_with_a_fresh_serial() {
     assert_eq!(keyboard_focus(&mut f), Some(server_surface(&target_win)));
 }
 
-/// A serial is a plain number on the wire: a sandboxed app without focus can
-/// cite the newest one there is, so holding focus is what the check rests on.
+/// The serial is client-chosen, so even one ahead of the latest enter grants
+/// nothing to a sandboxed app without the keyboard.
 #[test]
 fn a_sandboxed_app_without_focus_cannot_activate() {
     let mut f = Fixture::new();
@@ -817,8 +817,6 @@ fn an_activation_token_is_spent_by_the_activation_it_grants() {
     assert_eq!(keyboard_focus(&mut f), Some(server_surface(&requester_win)));
 }
 
-/// Tokens a client mints and never spends are held for it: their number is
-/// bounded, so minting at wire speed can't grow the compositor without limit.
 #[test]
 fn unspent_activation_tokens_are_bounded() {
     let mut f = Fixture::new();

@@ -37,7 +37,6 @@ use super::{
     window_by_app_id,
 };
 
-/// evdev code of the A key.
 const KEY_A: u32 = 30;
 
 fn origin_view(f: &mut Fixture) {
@@ -320,7 +319,7 @@ fn lock_unsets_a_live_keyboard_grab() {
 }
 
 /// A keyboard grab that counts the keys it is handed and otherwise passes
-/// focus through — a stand-in for an input method's grab.
+/// focus through, modelling an input method's grab.
 struct CountingKeyboardGrab {
     keys: std::rc::Rc<std::cell::Cell<usize>>,
     start: smithay::input::keyboard::GrabStartData<crate::state::DriftWm>,
@@ -357,9 +356,8 @@ impl smithay::input::keyboard::KeyboardGrab<crate::state::DriftWm> for CountingK
     fn unset(&mut self, _data: &mut crate::state::DriftWm) {}
 }
 
-/// `lock()` drops the grab it finds, but an input method may ask for a new one
-/// mid-lock — smithay installs it with no hook to refuse — so a key typed at
-/// the lock screen must still reach no grab, only the lock surface.
+/// `lock()` only drops the grab it finds; one an input method installs
+/// mid-lock must still see no key typed at the lock screen.
 #[test]
 fn a_keyboard_grab_installed_mid_lock_sees_no_keys() {
     let mut f = Fixture::new();

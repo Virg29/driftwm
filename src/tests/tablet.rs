@@ -901,8 +901,7 @@ fn the_tool_cursor_is_dropped_when_the_pen_leaves_proximity() {
 }
 
 /// A pen resting over a window keeps the tool on it through the lock, so the
-/// window can still set the tool's cursor, which the lock frame draws over the
-/// lock screen.
+/// window can still ask for a tool cursor; the lock screen keeps its own.
 #[test]
 fn a_tool_cursor_set_while_locked_is_ignored() {
     let mut f = Fixture::new();

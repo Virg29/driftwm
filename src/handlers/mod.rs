@@ -202,8 +202,8 @@ impl TabletSeatHandler for DriftWm {
         image: CursorImageStatus,
     ) {
         // The locked dispatch forwards no tablet event, so no tool can reach
-        // a lock surface: an image now comes from a client behind the lock,
-        // and the lock frame draws the cursor over the lock screen.
+        // a lock surface: any image set while locked comes from a client behind
+        // the lock, and the lock frame would draw it over the lock screen.
         if self.session_lock.is_locked() {
             return;
         }
@@ -286,7 +286,6 @@ fn prune_activation_tokens(state: &mut XdgActivationState) {
 }
 
 impl DriftWm {
-    /// Whether the client that minted `data` holds the keyboard.
     fn token_client_holds_keyboard(&self, data: &XdgActivationTokenData) -> bool {
         self.seat
             .get_keyboard()
@@ -296,10 +295,9 @@ impl DriftWm {
             .is_some_and(|client| Some(client.id()) == data.client_id)
     }
 
-    /// Whether a token minted by a sandboxed client may grant focus: it has to
-    /// cite a serial no older than the keyboard's last enter, while the client
-    /// holds the keyboard. The client picks the serial, so it could cite one
-    /// ahead of any enter; holding the keyboard is what that can't fake.
+    /// Whether a sandboxed client's token may grant focus: it must cite a serial
+    /// no older than the keyboard's last enter, and the client must hold the
+    /// keyboard, since the serial is client-chosen and proves nothing alone.
     fn restricted_token_grants_focus(&self, data: &XdgActivationTokenData) -> bool {
         let Some((serial, _)) = data.serial else {
             return false;
@@ -415,8 +413,8 @@ impl XdgActivationHandler for DriftWm {
             self.xdg_activation_state.remove_token(&token);
             return;
         }
-        // Spent after the user moved on, a sandboxed app's token would pull
-        // the keyboard back to it.
+        // A sandboxed app's token is void once that app loses the keyboard, so
+        // focus stays where the user moved it.
         if token_data.user_data.get::<SandboxedToken>().is_some()
             && !self.token_client_holds_keyboard(&token_data)
         {

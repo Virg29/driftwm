@@ -406,9 +406,8 @@ fn raise_parent_with_activated_child_is_quiet() {
     );
 }
 
-/// A client can size its surface without limit — a 1x1 buffer stretched by a
-/// viewport destination — and asking for a server-side title bar then has the
-/// compositor rasterize one as wide as the window on its first sized commit.
+/// A client can size its surface without limit, so a window of any width must
+/// open with its server-side title bar.
 #[test]
 fn a_server_decorated_window_wider_than_any_buffer_opens() {
     let mut f = Fixture::with_config(super::config(
