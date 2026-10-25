@@ -254,6 +254,9 @@ const ACTIVATION_TOKEN_TTL: std::time::Duration = std::time::Duration::from_secs
 /// Most client-minted activation tokens held at once; the oldest go first.
 const MAX_ACTIVATION_TOKENS: usize = 256;
 
+/// Marks a token a sandboxed client minted.
+struct SandboxedToken;
+
 fn is_relaunch_token(data: &XdgActivationTokenData) -> bool {
     data.user_data
         .get::<crate::state::RelaunchMarker>()
@@ -283,6 +286,16 @@ fn prune_activation_tokens(state: &mut XdgActivationState) {
 }
 
 impl DriftWm {
+    /// Whether the client that minted `data` holds the keyboard.
+    fn token_client_holds_keyboard(&self, data: &XdgActivationTokenData) -> bool {
+        self.seat
+            .get_keyboard()
+            .unwrap()
+            .current_focus()
+            .and_then(|focus| focus.0.client())
+            .is_some_and(|client| Some(client.id()) == data.client_id)
+    }
+
     /// Whether a token minted by a sandboxed client may grant focus: it has to
     /// cite a serial no older than the keyboard's last enter, while the client
     /// holds the keyboard. The client picks the serial, so it could cite one
@@ -291,13 +304,11 @@ impl DriftWm {
         let Some((serial, _)) = data.serial else {
             return false;
         };
-        let keyboard = self.seat.get_keyboard().unwrap();
-        let holds_keyboard = keyboard
-            .current_focus()
-            .and_then(|focus| focus.0.client())
-            .is_some_and(|client| Some(client.id()) == data.client_id);
-        holds_keyboard
-            && keyboard
+        self.token_client_holds_keyboard(data)
+            && self
+                .seat
+                .get_keyboard()
+                .unwrap()
                 .last_enter()
                 .is_some_and(|enter| serial.is_no_older_than(&enter))
     }
@@ -327,8 +338,12 @@ impl XdgActivationHandler for DriftWm {
                     .map(|state| !state.is_restricted)
             })
             .unwrap_or(false);
-        if !unrestricted && !self.restricted_token_grants_focus(&data) {
-            return false;
+        if !unrestricted {
+            if !self.restricted_token_grants_focus(&data) {
+                return false;
+            }
+            data.user_data
+                .insert_if_missing_threadsafe(|| SandboxedToken);
         }
         if data.serial.is_some() {
             let now = std::time::Instant::now();
@@ -398,6 +413,13 @@ impl XdgActivationHandler for DriftWm {
         // smithay never expires a token itself.
         if activation_token_expired(&token_data) {
             self.xdg_activation_state.remove_token(&token);
+            return;
+        }
+        // Spent after the user moved on, a sandboxed app's token would pull
+        // the keyboard back to it.
+        if token_data.user_data.get::<SandboxedToken>().is_some()
+            && !self.token_client_holds_keyboard(&token_data)
+        {
             return;
         }
 

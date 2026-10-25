@@ -693,6 +693,34 @@ fn a_sandboxed_app_without_focus_cannot_activate() {
     assert_eq!(keyboard_focus(&mut f), Some(server_surface(&other_win)));
 }
 
+/// A token minted while the sandboxed app held the keyboard must not pull the
+/// keyboard back once the user has moved on to another app.
+#[test]
+fn a_sandboxed_apps_token_is_void_once_it_loses_the_keyboard() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let sandboxed = f.add_restricted_client();
+    let target = map_window(&mut f, sandboxed, "target", (400, 300));
+    let requester = map_window(&mut f, sandboxed, "requester", (400, 300));
+    let serial = keyboard_enter_serial(&mut f);
+    f.client(sandboxed)
+        .request_activation_token_with_serial(&requester, serial);
+    f.roundtrip(sandboxed);
+    let other = f.add_client();
+    map_window(&mut f, other, "other", (400, 300));
+    let other_win = window_by_app_id(&mut f, "other").unwrap();
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(server_surface(&other_win)),
+        "precondition: the user moved on to another app"
+    );
+
+    f.client(sandboxed).activate(&target);
+    f.double_roundtrip(sandboxed);
+
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&other_win)));
+}
+
 #[test]
 fn a_sandboxed_app_citing_a_serial_from_before_its_focus_cannot_activate() {
     let mut f = Fixture::new();
