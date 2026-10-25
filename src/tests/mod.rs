@@ -73,6 +73,7 @@ mod render_pixels;
 mod resize_actions;
 mod resize_ipc;
 mod resize_parity;
+mod screenshot_write;
 mod send_to_output;
 mod session_lock;
 mod session_restore;
