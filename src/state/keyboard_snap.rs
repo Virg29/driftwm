@@ -78,11 +78,11 @@ impl DriftWm {
             }
             return;
         }
-        // As an edge pan carries a dragged window: once its leading edge
-        // reaches the line the pan holds it on, it rides there while the
-        // canvas scrolls under it, only the way the window went, where parking
-        // every step would throw the view around. Shown at the size just
-        // judged, which a client that declined a resize is still drawn at.
+        // As an edge pan carries a dragged window: it rides the `outer_gap`
+        // line while the canvas scrolls under it, only the way the window
+        // went, where parking every step would throw the view around. Shown
+        // at the size just judged, which a client that declined a resize is
+        // still drawn at.
         let pan = MinimalPan::LeadingEdge {
             horizontal,
             forward,

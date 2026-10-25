@@ -237,13 +237,13 @@ impl DriftWm {
                 horizontal,
                 forward,
             } => {
-                // Steering by a point lying far off screen along an axis would
-                // swing the camera there with whatever zoom is left to fly. So
-                // the move steers by the leading edge, which lands on screen
-                // however big the frame, and the held axis keeps the anchor a
-                // flight under way steers by, and so its course. Every zoom
-                // flight arms an anchor, so with none the zoom holds and the
-                // camera's own origin serves.
+                // Steering by a point far off screen would swing the camera
+                // there with whatever zoom is left to fly, so the move steers
+                // by its leading edge, which lands on screen however big the
+                // frame, and the held axis keeps the anchor of any flight
+                // under way, and so its course. Every zoom flight arms an
+                // anchor, so with none the zoom holds and the camera's own
+                // origin serves.
                 let held =
                     output_state(&output)
                         .zoom_animation_anchor

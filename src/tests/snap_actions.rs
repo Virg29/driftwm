@@ -542,8 +542,8 @@ fn move_to_snap_nudging_mid_zoom_never_carries_a_too_big_window_past_the_line() 
         f.state().apply_camera_animation(TICK);
 
         act(&mut f, Action::MoveToSnap(dir.clone()));
-        // How far the leading edge sits inside its line at the landing zoom,
-        // in screen px.
+        // How far, in screen px, the leading edge sits inside the line as it
+        // lies at the landing zoom.
         let inside = |f: &mut Fixture| {
             let rect = f
                 .state()
