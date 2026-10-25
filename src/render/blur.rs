@@ -1617,18 +1617,20 @@ pub(crate) fn process_blur_requests(
                 (pad_live.w as f64, pad_live.h as f64).into(),
             );
             let full = Rectangle::from_size(pad_live);
-            let _ = frame.render_texture_from_to(
-                &scratch,
-                src_rect,
-                full,
-                &[full],
-                &[],
-                Transform::Normal,
-                1.0,
-                None,
-                &[],
-            );
-            if frame.finish().is_err() {
+            let copied = frame
+                .render_texture_from_to(
+                    &scratch,
+                    src_rect,
+                    full,
+                    &[full],
+                    &[],
+                    Transform::Normal,
+                    1.0,
+                    None,
+                    &[],
+                )
+                .is_ok();
+            if !(frame.finish().is_ok() && copied) {
                 tracing::debug!(
                     surface = %req.surface_id,
                     "frost left unrendered: the padded backdrop copy failed"
@@ -1812,8 +1814,8 @@ pub(crate) fn process_blur_requests(
                 else {
                     continue;
                 };
-                let _ = frame.clear(Color32F::TRANSPARENT, &outside);
-                if frame.finish().is_err() {
+                let cleared = frame.clear(Color32F::TRANSPARENT, &outside).is_ok();
+                if !(frame.finish().is_ok() && cleared) {
                     tracing::debug!(
                         surface = %req.surface_id,
                         "frost left unmasked: clearing outside the blur region failed"
