@@ -79,6 +79,8 @@ use wayland_protocols::xdg::activation::v1::client::xdg_activation_token_v1::{
     self, XdgActivationTokenV1,
 };
 use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1::XdgActivationV1;
+use wayland_protocols::xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1;
+use wayland_protocols::xdg::dialog::v1::client::xdg_wm_dialog_v1::XdgWmDialogV1;
 use wayland_protocols::xdg::shell::client::xdg_popup::{self, XdgPopup};
 use wayland_protocols::xdg::shell::client::xdg_positioner::{
     Anchor, ConstraintAdjustment, Gravity, XdgPositioner,
@@ -128,6 +130,7 @@ pub struct State {
     pub keyboard: Option<WlKeyboard>,
     pub pointer_constraints: Option<ZwpPointerConstraintsV1>,
     pub xdg_activation: Option<XdgActivationV1>,
+    pub xdg_wm_dialog: Option<XdgWmDialogV1>,
     pub ext_session_lock_manager: Option<ExtSessionLockManagerV1>,
     pub idle_notifier: Option<ExtIdleNotifierV1>,
     pub virtual_keyboard_manager: Option<ZwpVirtualKeyboardManagerV1>,
@@ -579,6 +582,7 @@ impl Client {
             keyboard: None,
             pointer_constraints: None,
             xdg_activation: None,
+            xdg_wm_dialog: None,
             ext_session_lock_manager: None,
             idle_notifier: None,
             virtual_keyboard_manager: None,
@@ -779,6 +783,13 @@ impl Client {
     /// via `done`; roundtrip before calling [`Client::activate`].
     pub fn request_activation_token(&mut self, requester: &WlSurface, with_serial: bool) {
         self.state.request_activation_token(requester, with_serial);
+    }
+
+    /// Register `toplevel` as an xdg-dialog; the returned object carries the
+    /// modal hint.
+    pub fn get_dialog(&mut self, toplevel: &XdgToplevel) -> XdgDialogV1 {
+        let wm_dialog = self.state.xdg_wm_dialog.as_ref().unwrap();
+        wm_dialog.get_xdg_dialog(toplevel, &self.qh, ())
     }
 
     /// Activate `target` with the most recently received token string.
@@ -1932,6 +1943,9 @@ impl Dispatch<WlRegistry, ()> for State {
                 } else if interface == XdgActivationV1::interface().name {
                     let version = min(version, XdgActivationV1::interface().version);
                     state.xdg_activation = Some(registry.bind(name, version, qh, ()));
+                } else if interface == XdgWmDialogV1::interface().name {
+                    let version = min(version, XdgWmDialogV1::interface().version);
+                    state.xdg_wm_dialog = Some(registry.bind(name, version, qh, ()));
                 } else if interface == WlOutput::interface().name {
                     let version = min(version, WlOutput::interface().version);
                     let output = registry.bind(name, version, qh, ());
@@ -2704,6 +2718,32 @@ impl Dispatch<XdgActivationV1, ()> for State {
         _state: &mut Self,
         _proxy: &XdgActivationV1,
         _event: <XdgActivationV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        unreachable!()
+    }
+}
+
+impl Dispatch<XdgWmDialogV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &XdgWmDialogV1,
+        _event: <XdgWmDialogV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        unreachable!()
+    }
+}
+
+impl Dispatch<XdgDialogV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &XdgDialogV1,
+        _event: <XdgDialogV1 as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,

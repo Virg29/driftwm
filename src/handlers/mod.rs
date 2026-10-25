@@ -564,15 +564,33 @@ impl XdgDialogHandler for DriftWm {
         toplevel: ToplevelSurface,
         hint: smithay::wayland::shell::xdg::dialog::ToplevelDialogHint,
     ) {
-        if hint == smithay::wayland::shell::xdg::dialog::ToplevelDialogHint::Modal {
-            // Redirect focus from parent to this modal dialog
-            let wl_surface = toplevel.wl_surface().clone();
-            let window = self.window_for_surface(&wl_surface);
-            if let Some(window) = window {
-                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-                self.raise_and_focus(&window, serial);
-            }
+        if hint != smithay::wayland::shell::xdg::dialog::ToplevelDialogHint::Modal {
+            return;
         }
+        // Any app can flag a window modal at any time, so the hint only moves
+        // the keyboard off a parent whose app already holds it; otherwise the
+        // dialog is reached by focusing its parent.
+        let Some(parent_surface) = toplevel.parent() else {
+            return;
+        };
+        let (Some(parent), Some(parent_client)) = (
+            self.window_for_surface(&parent_surface),
+            parent_surface.client(),
+        ) else {
+            return;
+        };
+        let keyboard_on_parent_app = self
+            .seat
+            .get_keyboard()
+            .unwrap()
+            .current_focus()
+            .is_some_and(|focus| focus.0.client().as_ref() == Some(&parent_client));
+        if !keyboard_on_parent_app {
+            return;
+        }
+        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+        // Redirects to the topmost modal child, this dialog included.
+        self.raise_and_focus(&parent, serial);
     }
 }
 
