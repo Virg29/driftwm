@@ -527,14 +527,15 @@ fn parse_region(tokens: &[String]) -> Result<(i32, i32, i32, i32), String> {
 }
 
 /// Resolve the output path the compositor will write to. It must be absolute —
-/// the compositor's working directory differs from the client's. `run` swaps
-/// the path for `-` with a [`StdoutCapture`].
+/// the compositor's working directory differs from the client's. `-` is left
+/// empty for `run` to fill with a [`StdoutCapture`].
 fn resolve_output_path(output: &Option<String>) -> Result<String, String> {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let raw = match output.as_deref() {
+        Some("-") => return Ok(String::new()),
         Some(p) => PathBuf::from(p),
         None => PathBuf::from(format!("driftwm-screenshot-{secs}.png")),
     };
@@ -549,8 +550,9 @@ fn resolve_output_path(output: &Option<String>) -> Result<String, String> {
 }
 
 /// The file `screenshot -o -` has the compositor write before it is relayed to
-/// stdout: created new and private under `$XDG_RUNTIME_DIR/driftwm/`, so no
-/// other user can plant or read it, and removed when this drops.
+/// stdout: created new under `$XDG_RUNTIME_DIR/driftwm/`, a directory only this
+/// user can enter, so no one else can plant or read it, and removed when this
+/// drops.
 struct StdoutCapture {
     path: PathBuf,
 }
@@ -1058,6 +1060,21 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn screenshot_to_stdout_leaves_the_path_for_its_capture_file() {
+        // Resolved against nothing, so it works from a deleted working directory.
+        let req = to_request(&Msg::Screenshot {
+            target: None,
+            scale: 1.0,
+            output: Some("-".into()),
+        })
+        .unwrap();
+        let Request::Screenshot { path, .. } = req else {
+            panic!("expected screenshot request");
+        };
+        assert_eq!(path, "");
     }
 
     #[test]
