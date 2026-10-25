@@ -572,8 +572,9 @@ impl DriftWm {
             content.push('\n');
         }
 
-        if !layers.is_empty() {
-            content += &format!("layers={}\n", layers.join(","));
+        let layers_line = state_file_layers(&layers);
+        if !layers_line.is_empty() {
+            content += &format!("layers={layers_line}\n");
         }
 
         if !canvas_layer_infos.is_empty()
@@ -622,6 +623,23 @@ impl DriftWm {
             self.state_file_active_output = active_name;
         }
     }
+}
+
+/// Layer namespaces as the state file's comma-separated `layers=` value. A
+/// namespace is whatever its client chose, so a newline in one could forge
+/// lines of its own and a comma split it in two: both, and every other control
+/// character, are dropped.
+fn state_file_layers(layers: &[String]) -> String {
+    layers
+        .iter()
+        .map(|ns| {
+            ns.chars()
+                .filter(|c| !c.is_control() && *c != ',')
+                .collect::<String>()
+        })
+        .filter(|ns| !ns.is_empty())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// The `outputs.{name}.camera_x/camera_y/zoom` lines for one output. The camera
@@ -702,6 +720,17 @@ fn parse_per_output_state(content: &str) -> HashMap<String, (CameraSeed, f64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layer_namespaces_cannot_forge_or_split_state_file_lines() {
+        let layers = [
+            "waybar".to_string(),
+            "evil\nx=1e9".to_string(),
+            "a,b".to_string(),
+            "\u{7}\r".to_string(),
+        ];
+        assert_eq!(state_file_layers(&layers), "waybar,evilx=1e9,ab");
+    }
 
     fn win(id: u64, title: &str) -> WindowInfo {
         WindowInfo {
