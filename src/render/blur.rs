@@ -648,16 +648,29 @@ fn backdrop_wrap_mode(renderer: &mut GlesRenderer) -> i32 {
 /// destination does not invert back to it exactly, so the filter at the far
 /// edge can still reach the first slack texel — transparent black is a far
 /// better thing for it to find than whatever the driver handed over.
-fn zero_texture(renderer: &mut GlesRenderer, texture: &GlesTexture, size: Size<i32, Physical>) {
+///
+/// Answers whether it did, logging at debug when not.
+fn zero_texture(
+    renderer: &mut GlesRenderer,
+    texture: &GlesTexture,
+    size: Size<i32, Physical>,
+) -> bool {
     use smithay::backend::renderer::{Bind, Color32F, Frame, Renderer};
     let mut texture = texture.clone();
-    let Ok(mut target) = renderer.bind(&mut texture) else {
-        return;
-    };
-    if let Ok(mut frame) = renderer.render(&mut target, size, Transform::Normal) {
-        let _ = frame.clear(Color32F::TRANSPARENT, &[Rectangle::from_size(size)]);
-        let _ = frame.finish();
+    let cleared = renderer.bind(&mut texture).is_ok_and(|mut target| {
+        renderer
+            .render(&mut target, size, Transform::Normal)
+            .is_ok_and(|mut frame| {
+                let cleared = frame
+                    .clear(Color32F::TRANSPARENT, &[Rectangle::from_size(size)])
+                    .is_ok();
+                frame.finish().is_ok() && cleared
+            })
+    });
+    if !cleared {
+        tracing::debug!(?size, "blur texture left uncleared: the clear failed");
     }
+    cleared
 }
 
 /// Wrap mode has to be re-applied at every allocation: `create_buffer` leaves
@@ -1422,7 +1435,7 @@ pub(crate) fn process_blur_requests(
                     &[],
                 )
                 .is_ok();
-            let _ = frame.finish();
+            let sliced = frame.finish().is_ok() && sliced;
             if !sliced {
                 tracing::debug!(
                     surface = %req.surface_id,
@@ -1485,7 +1498,9 @@ pub(crate) fn process_blur_requests(
                 output = %output_name,
                 "frost zeroed: nothing is drawn beneath this surface to capture"
             );
-            zero_texture(renderer, &cache.texture, cache.alloc);
+            if !zero_texture(renderer, &cache.texture, cache.alloc) {
+                continue;
+            }
             // Settling has to take the commit signal with it, or the warm-up
             // re-dirties this frost every frame the scene stays empty beneath.
             cache.mask_commits = surface_commits(all_elements, surface_ranges[i]).collect();
@@ -1613,7 +1628,13 @@ pub(crate) fn process_blur_requests(
                 None,
                 &[],
             );
-            let _ = frame.finish();
+            if frame.finish().is_err() {
+                tracing::debug!(
+                    surface = %req.surface_id,
+                    "frost left unrendered: the padded backdrop copy failed"
+                );
+                continue;
+            }
         }
 
         // Run Kawase blur passes on the padded crop
@@ -1671,7 +1692,7 @@ pub(crate) fn process_blur_requests(
                     &[],
                 )
                 .is_ok();
-            let _ = frame.finish();
+            let cropped = frame.finish().is_ok() && cropped;
             if !cropped {
                 tracing::debug!(
                     surface = %req.surface_id,
@@ -1792,7 +1813,13 @@ pub(crate) fn process_blur_requests(
                     continue;
                 };
                 let _ = frame.clear(Color32F::TRANSPARENT, &outside);
-                let _ = frame.finish();
+                if frame.finish().is_err() {
+                    tracing::debug!(
+                        surface = %req.surface_id,
+                        "frost left unmasked: clearing outside the blur region failed"
+                    );
+                    continue;
+                }
             }
             let commits: Vec<CommitCounter> =
                 surface_commits(all_elements, surface_ranges[i]).collect();
@@ -1844,7 +1871,7 @@ pub(crate) fn process_blur_requests(
             let _ = frame.with_context(|gl| unsafe {
                 gl.BlendFunc(ffi::ONE, ffi::ONE_MINUS_SRC_ALPHA);
             });
-            let _ = frame.finish();
+            let applied = frame.finish().is_ok() && applied;
             // Without the multiply the texture is the bare blur: a full frosted
             // rectangle ignoring the window's alpha shape and its client blur
             // region. Leave it dirty so the next frame rebuilds it.
