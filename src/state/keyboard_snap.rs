@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use smithay::utils::{Logical, Point};
 
-use super::{DriftWm, NavZoom, StageWindow};
+use super::{Axes, DriftWm, NavZoom, StageWindow};
 use driftwm::config::Direction;
 use driftwm::layout::snap::{self, SnapRect, StopQuery};
 
@@ -69,9 +69,16 @@ impl DriftWm {
 
         // Judged where a flight still under way lands, not at its current
         // frame: a pan heading for the previous stop would leave this one.
+        // A nudge moves the window along one axis only, so the camera has no
+        // reason to move along the other.
         let (camera, zoom) = self.landing_view();
         let landed = super::fit::snap_rect_at(new_loc, size, bar, bw);
-        if self.frame_fully_in_view_at(&landed, camera, zoom) {
+        let axes = if stop.is_some() {
+            Axes::Both
+        } else {
+            Axes::Only { horizontal }
+        };
+        if self.frame_fully_in_view_at(&landed, camera, zoom, axes) {
             return;
         }
         if stop.is_some() {
@@ -81,7 +88,7 @@ impl DriftWm {
             // edge while the canvas scrolls under it, where parking every
             // step would throw the view around. Shown at the size just judged,
             // which a client that declined a resize is still drawn at.
-            self.pan_minimally_to_element(&element, &landed, camera, zoom);
+            self.pan_minimally_to_element(&element, &landed, camera, zoom, axes);
         }
     }
 

@@ -221,6 +221,146 @@ fn move_to_snap_nudging_out_of_view_mid_pan_lets_the_pan_land() {
     assert_eq!(f.state().camera(), Point::from((25.0, 100.0)));
 }
 
+/// A nudge moves the window along one axis, so the camera follows along that
+/// axis only: a window too tall for the view, nudged out past the right edge,
+/// scrolls the canvas across and never down to centre it.
+#[test]
+fn move_to_snap_nudging_a_too_tall_window_out_of_view_pans_only_across() {
+    let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 35\n"));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    // Centred vertically, the camera would sit at y -140.
+    let (a, _) = window_at(&mut f, id, "a", (1498, -200), (400, 1200));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+
+    act(&mut f, Action::MoveToSnap(Direction::Right));
+    settle(&mut f);
+    let (right, riding) = right_edges_on_screen(&mut f, &a);
+    assert_eq!(right, riding, "outer_gap in from the right edge");
+    assert_eq!(f.state().camera(), Point::from((25.0, 0.0)));
+}
+
+/// Whether a nudge needs the camera is judged along the move as well: a window
+/// too tall to ever show whole, nudged sideways while in view across, leaves
+/// the camera alone.
+#[test]
+fn move_to_snap_nudging_a_too_tall_window_within_view_leaves_the_camera_alone() {
+    let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 35\n"));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let (a, _) = window_at(&mut f, id, "a", (1000, -200), (400, 1200));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+
+    act(&mut f, Action::MoveToSnap(Direction::Right));
+    assert_eq!(window_position(&mut f, &a), Point::from((1035, -200)));
+    assert!(f.state().camera_target().is_none() && f.state().zoom_target().is_none());
+    assert_eq!(
+        f.state()
+            .with_output_state(|os| os.zoom_animation_anchor.is_none()),
+        Some(true),
+        "no anchor armed"
+    );
+    assert_eq!(f.state().camera(), Point::from((0.0, 0.0)));
+}
+
+/// The same down the screen: a window too wide for the view, nudged down,
+/// leaves the camera alone while it is in view vertically, then scrolls the
+/// canvas down and never across.
+#[test]
+fn move_to_snap_nudging_a_too_wide_window_down_pans_only_down() {
+    let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 35\n"));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    // Centred across, the camera would sit at x -60.
+    let (a, _) = window_at(&mut f, id, "a", (-100, 740), (2000, 300));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+
+    act(&mut f, Action::MoveToSnap(Direction::Down));
+    assert_eq!(window_position(&mut f, &a), Point::from((-100, 775)));
+    assert!(f.state().camera_target().is_none() && f.state().zoom_target().is_none());
+
+    act(&mut f, Action::MoveToSnap(Direction::Down));
+    settle(&mut f);
+    assert_eq!(
+        f.state().camera(),
+        Point::from((0.0, 42.0)),
+        "the bottom edge, at 1110, outer_gap in from 1080"
+    );
+}
+
+/// At zoom 0.5 the view spans 3840 x 2160 canvas px, which a 4000 x 2200
+/// window overflows both ways. Each nudge re-centres it across, so the camera
+/// moves with it press by press, and never vertically; the zoom holds.
+#[test]
+fn move_to_snap_nudging_a_window_too_big_both_ways_follows_it_across_only() {
+    let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 35\n"));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let (a, _) = window_at(&mut f, id, "a", (0, 0), (4000, 2200));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+    f.state().with_output_state(|os| os.zoom = 0.5);
+
+    // The frame's centre, 2000 canvas px in, sits 1920 in from the camera.
+    for camera_x in [115.0, 150.0, 185.0] {
+        act(&mut f, Action::MoveToSnap(Direction::Right));
+        settle(&mut f);
+        assert_eq!(f.state().camera(), Point::from((camera_x, 0.0)));
+        assert_eq!(f.state().zoom(), 0.5);
+    }
+}
+
+/// A window clipped at the bottom and nudged out past the right edge is
+/// brought back across only: the nudge never moved it down, so the camera
+/// doesn't scroll down to it either.
+#[test]
+fn move_to_snap_nudging_out_of_view_leaves_a_clip_at_the_bottom() {
+    let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 35\n"));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let (a, _) = window_at(&mut f, id, "a", (1498, 900), (400, 300));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+
+    act(&mut f, Action::MoveToSnap(Direction::Right));
+    settle(&mut f);
+    assert_eq!(f.state().camera(), Point::from((25.0, 0.0)));
+    let rect = f
+        .state()
+        .visual_frame_rect(&StageWindow::Client(a.clone()))
+        .unwrap();
+    assert_eq!(rect.y_high, 1200.0, "still clipped at the bottom");
+}
+
+/// A nudge during a flight across its axis leaves that flight's heading
+/// alone: a pan down lands where it was going even though the window it
+/// reveals across is clipped at the bottom there.
+#[test]
+fn move_to_snap_nudging_out_of_view_mid_pan_down_lands_the_pan_where_it_was_heading() {
+    let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 35\n"));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    // At the pan's landing, y 100, the frame's bottom at 1200 shows at 1100.
+    let (a, _) = window_at(&mut f, id, "a", (1498, 900), (400, 300));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+    act(&mut f, Action::PanViewport(Direction::Down));
+    f.state().apply_zoom_animation(TICK);
+    f.state().apply_camera_animation(TICK);
+    let camera = f.state().camera();
+    assert!(
+        camera.y > 0.0 && camera.y < 100.0,
+        "precondition: the pan is under way: {camera:?}"
+    );
+
+    act(&mut f, Action::MoveToSnap(Direction::Right));
+    settle(&mut f);
+    assert_eq!(f.state().camera(), Point::from((25.0, 100.0)));
+}
+
 /// `nudge_step` takes any non-negative `i32`, so the nudged position has to
 /// saturate rather than wrap.
 #[test]

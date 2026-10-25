@@ -96,6 +96,14 @@ pub enum RevealPan {
     Minimal,
 }
 
+/// The axes an in-view test judges a frame along, and a minimal pan moves the
+/// camera along; a pan along one keeps the camera's coordinate on the other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Axes {
+    Both,
+    Only { horizontal: bool },
+}
+
 impl DriftWm {
     /// Navigate the active output's viewport to a window: raise, focus, animate
     /// the camera until the window sits on the `focus_placement` point (the
@@ -137,21 +145,22 @@ impl DriftWm {
             RevealPan::Park(nav_zoom) => self.navigate_to_element(element, nav_zoom),
             RevealPan::Minimal => {
                 if let Some(frame) = self.reveal_frame(element) {
-                    self.pan_minimally_to_element(element, &frame, camera, zoom);
+                    self.pan_minimally_to_element(element, &frame, camera, zoom, Axes::Both);
                 }
             }
         }
     }
 
     /// Focus + raise `element` and pan the active output's view from `camera`
-    /// at `zoom` by the least amount that shows the element's `frame` whole,
-    /// `outer_gap` in from the usable edge.
+    /// at `zoom` by the least amount that shows the element's `frame` whole
+    /// along `axes`, `outer_gap` in from the usable edge.
     pub(super) fn pan_minimally_to_element(
         &mut self,
         element: &StageWindow,
         frame: &SnapRect,
         camera: Point<f64, Logical>,
         zoom: f64,
+        axes: Axes,
     ) {
         // As in `navigate_to_window_on`: nothing is drawn for it yet.
         if self.hidden_by_deferred_adopt(element) {
@@ -169,8 +178,13 @@ impl DriftWm {
         // which would leave the revealed frame clipped.
         let border = self.element_chrome(element).border;
         let inset = self.config.outer_frame_inset(border).max(0.0);
-        let target =
+        let mut target =
             minimal_reveal_camera(frame, camera, zoom, self.usable_area_on(&output), inset);
+        match axes {
+            Axes::Both => {}
+            Axes::Only { horizontal: true } => target.y = camera.y,
+            Axes::Only { horizontal: false } => target.x = camera.x,
+        }
 
         // Through the anchor, not a bare `camera_target`: an anchor still armed
         // by the previous pan would steer the camera back every tick.
@@ -436,7 +450,7 @@ impl DriftWm {
             return;
         };
         let (camera, zoom) = self.landing_view();
-        self.pan_minimally_to_element(&element, &frame, camera, zoom);
+        self.pan_minimally_to_element(&element, &frame, camera, zoom, Axes::Both);
     }
 
     /// Cancel any armed or deferred click-navigate. Clearing the deferred timer
@@ -725,16 +739,17 @@ impl DriftWm {
         let Some(rect) = self.visual_frame_rect(elem) else {
             return false;
         };
-        self.frame_fully_in_view_at(&rect, camera, zoom)
+        self.frame_fully_in_view_at(&rect, camera, zoom, Axes::Both)
     }
 
-    /// Is the canvas rect `rect` inside the active output's usable area at
-    /// `camera` and `zoom`?
+    /// Is the canvas rect `rect` inside the active output's usable area along
+    /// `axes`, at `camera` and `zoom`?
     pub(crate) fn frame_fully_in_view_at(
         &self,
         rect: &SnapRect,
         camera: Point<f64, Logical>,
         zoom: f64,
+        axes: Axes,
     ) -> bool {
         let usable = self.get_usable_area();
 
@@ -748,10 +763,13 @@ impl DriftWm {
         let u_x_high = (usable.loc.x + usable.size.w) as f64 + IN_VIEW_NOISE;
         let u_y_high = (usable.loc.y + usable.size.h) as f64 + IN_VIEW_NOISE;
 
-        screen_x_low >= u_x_low
-            && screen_y_low >= u_y_low
-            && screen_x_high <= u_x_high
-            && screen_y_high <= u_y_high
+        let across = screen_x_low >= u_x_low && screen_x_high <= u_x_high;
+        let down = screen_y_low >= u_y_low && screen_y_high <= u_y_high;
+        match axes {
+            Axes::Both => across && down,
+            Axes::Only { horizontal: true } => across,
+            Axes::Only { horizontal: false } => down,
+        }
     }
 
     /// Whether the active output's view at `camera` and `zoom` shows `w` as
