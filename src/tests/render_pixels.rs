@@ -448,3 +448,118 @@ fn live_frame_agrees_with_the_capture_at_fractional_output_scale() {
     f.state().render.remove_output(&output_name);
     gl::uninstall(&mut f);
 }
+
+/// Map a shadowed window and return its frame (body plus ring) on the canvas.
+fn map_shadowed_window(f: &mut Fixture) -> smithay::utils::Rectangle<i32, smithay::utils::Logical> {
+    let pixels = solid_bgra(304, 204, CONTENT_BGRA, false);
+    let client = f.add_client();
+    map_window_shm(f, client, "pixels", (304, 204), (304, 204), &pixels);
+    super::tick_until_settled(f);
+    let window = super::window_by_app_id(f, "pixels").expect("the window mapped");
+    let loc = f.state().stage.position_of(&window).expect("on the stage");
+    let mut frame = smithay::utils::Rectangle::new(loc, window.geometry().size);
+    frame.loc -= (2, 2).into();
+    frame.size += (4, 4).into();
+    frame
+}
+
+/// The strongest alpha among the first `n` pixels of `line`.
+fn max_alpha(line: &[Rgba<u8>], n: usize) -> u8 {
+    line.iter().take(n).map(|p| p[3]).max().unwrap_or(0)
+}
+
+#[test]
+#[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
+fn a_client_side_window_just_off_screen_still_casts_its_shadow_in() {
+    let _gl = gl::lock();
+    let Some(renderer) = gl::surfaceless_renderer("shadow past the left edge") else {
+        return;
+    };
+
+    let mut f = Fixture::with_config(super::config(&config_toml(true)));
+    let output = f.add_output(1, (800, 600));
+    gl::install(&mut f, renderer);
+    let frame = map_shadowed_window(&mut f);
+
+    // The frame ends 3px left of the screen; only its shadow reaches in.
+    {
+        let mut os = crate::state::output_state(&output);
+        os.camera = smithay::utils::Point::from((
+            f64::from(frame.loc.x + frame.size.w + 3),
+            f64::from(frame.loc.y - 100),
+        ));
+    }
+    let mut backend = f
+        .state()
+        .backend
+        .take()
+        .expect("the fixture has a renderer");
+    let bytes = {
+        let renderer = backend.renderer();
+        let elements = crate::render::compose_frame(f.state(), renderer, &output, Vec::new());
+        let refs: Vec<&crate::render::OutputRenderElements> = elements.iter().collect();
+        crate::render::render_elements_to_rgba(
+            renderer,
+            Size::<i32, Physical>::from((800, 600)),
+            Scale::from(1.0),
+            &refs,
+        )
+    };
+    f.state().backend = Some(backend);
+    let img = RgbaImage::from_raw(800, 600, bytes.expect("render the frame")).unwrap();
+
+    let mid = (100 + frame.size.h / 2) as u32;
+    assert!(
+        max_alpha(&row(&img, mid), 8) > 0,
+        "the shadow shows along the left edge"
+    );
+
+    f.state().render.remove_output(&output.name());
+    gl::uninstall(&mut f);
+}
+
+#[test]
+#[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
+fn a_canvas_capture_beside_a_client_side_window_includes_its_shadow() {
+    let _gl = gl::lock();
+    let Some(renderer) = gl::surfaceless_renderer("shadow into a capture") else {
+        return;
+    };
+
+    let temp = TempDir::new();
+    let mut f = Fixture::with_config(super::config(&config_toml(true)));
+    f.add_output(1, (800, 600));
+    gl::install(&mut f, renderer);
+    let frame = map_shadowed_window(&mut f);
+
+    // A region starting 3px right of the frame, as a tile seam would cut it.
+    let region = smithay::utils::Rectangle::new(
+        (frame.loc.x + frame.size.w + 3, frame.loc.y).into(),
+        (40, frame.size.h).into(),
+    );
+    let path = temp.path().join("beside.png");
+    let mut backend = f
+        .state()
+        .backend
+        .take()
+        .expect("the fixture has a renderer");
+    let captured = crate::render::capture_region_to_png(
+        f.state(),
+        backend.renderer(),
+        region,
+        1.0,
+        false,
+        None,
+        &path,
+    );
+    f.state().backend = Some(backend);
+    captured.expect("capture the region");
+    let img = image::open(&path).expect("open the capture").to_rgba8();
+
+    assert!(
+        max_alpha(&row(&img, img.height() / 2), 8) > 0,
+        "the shadow shows along the capture's left edge"
+    );
+
+    gl::uninstall(&mut f);
+}

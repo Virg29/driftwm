@@ -257,6 +257,28 @@ fn push_plain_elements(
     }));
 }
 
+/// `bbox` grown to everything a window's chrome paints around it: the SSD bar
+/// `bar` tall above it, the border, and the shadow beyond that. A window is
+/// culled when this misses the view.
+fn chrome_cull_box(
+    mut bbox: Rectangle<i32, Logical>,
+    bar: i32,
+    border_width: i32,
+    shadow: bool,
+) -> Rectangle<i32, Logical> {
+    let shadow_pad = if shadow {
+        driftwm::config::DecorationConfig::SHADOW_RADIUS.ceil() as i32
+    } else {
+        0
+    };
+    let pad = border_width + shadow_pad;
+    bbox.loc.x -= pad;
+    bbox.loc.y -= bar + pad;
+    bbox.size.w += 2 * pad;
+    bbox.size.h += bar + 2 * pad;
+    bbox
+}
+
 /// Compose windows + SSD chrome + background for a *virtual* viewport at
 /// top-left canvas coord `camera`, `dpi_scale` pixels per canvas unit. DPI is
 /// folded into the render scale with zoom fixed at 1.0, so elements need no
@@ -413,20 +435,12 @@ pub(crate) fn compose_capture_elements(
 
         let mut bbox = window.bbox_with_popups();
         bbox.loc += loc - geom_loc;
-        if has_ssd {
-            let r = driftwm::config::DecorationConfig::SHADOW_RADIUS.ceil() as i32;
-            let bar = state.config.decorations.title_bar_height;
-            bbox.loc.x -= r;
-            bbox.loc.y -= bar + r;
-            bbox.size.w += 2 * r;
-            bbox.size.h += bar + 2 * r;
-        }
-        if effective_bw > 0 {
-            bbox.loc.x -= effective_bw;
-            bbox.loc.y -= effective_bw;
-            bbox.size.w += 2 * effective_bw;
-            bbox.size.h += 2 * effective_bw;
-        }
+        let bar = if has_ssd {
+            state.config.decorations.title_bar_height
+        } else {
+            0
+        };
+        let bbox = chrome_cull_box(bbox, bar, effective_bw, effective_shadow);
         if !visible_rect.overlaps(bbox) {
             continue;
         }
@@ -997,20 +1011,12 @@ pub fn compose_frame(
 
         let mut bbox = window.bbox_with_popups();
         bbox.loc += loc - geom_loc;
-        if has_ssd {
-            let r = driftwm::config::DecorationConfig::SHADOW_RADIUS.ceil() as i32;
-            let bar = state.config.decorations.title_bar_height;
-            bbox.loc.x -= r;
-            bbox.loc.y -= bar + r;
-            bbox.size.w += 2 * r;
-            bbox.size.h += bar + 2 * r;
-        }
-        if effective_bw > 0 {
-            bbox.loc.x -= effective_bw;
-            bbox.loc.y -= effective_bw;
-            bbox.size.w += 2 * effective_bw;
-            bbox.size.h += 2 * effective_bw;
-        }
+        let bar = if has_ssd {
+            state.config.decorations.title_bar_height
+        } else {
+            0
+        };
+        let bbox = chrome_cull_box(bbox, bar, effective_bw, frame_chrome.shadow);
         if !visible_rect.overlaps(state.window_cull_rect(element_id, bbox)) {
             continue;
         }
