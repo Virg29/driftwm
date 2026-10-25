@@ -29,8 +29,8 @@ enum TiffColor {
     Rgba8,
 }
 
-/// Longest side of a pyramid level decoded whole. Past it the one level is
-/// gigabytes of RGBA, enough to abort the compositor before it can draw.
+/// Longest side of a pyramid level decoded whole: 1 GiB of RGBA at the limit,
+/// and past it an allocation that can abort the compositor before it draws.
 pub const MAX_WHOLE_LOD_DIM: u32 = 16384;
 
 /// The level of `lods` to decode whole: the finest at most `preferred` px per

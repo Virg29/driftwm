@@ -759,8 +759,9 @@ pub(crate) const MAX_BOOKMARKS: usize = 256;
 /// Longest bookmark name, in bytes.
 pub(crate) const MAX_BOOKMARK_NAME: usize = 256;
 
-/// Why bookmark `name` at `[x, y]` can't be held, if it can't: the registry's
-/// bounds, shared by every way a bookmark is set.
+/// Why bookmark `name` at `[x, y]` can't be held, if it can't: the bounds on
+/// a bookmark set over IPC, by `set-bookmark`, or read back from a session.
+/// Config seeds are the user's own and stand outside them.
 fn bookmark_problem(name: &str, [x, y]: [f64; 2]) -> Option<String> {
     if name.len() > MAX_BOOKMARK_NAME {
         return Some(format!(
