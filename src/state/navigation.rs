@@ -135,16 +135,21 @@ impl DriftWm {
         }
         match pan {
             RevealPan::Park(nav_zoom) => self.navigate_to_element(element, nav_zoom),
-            RevealPan::Minimal => self.pan_minimally_to_element(element, camera, zoom),
+            RevealPan::Minimal => {
+                if let Some(frame) = self.reveal_frame(element) {
+                    self.pan_minimally_to_element(element, &frame, camera, zoom);
+                }
+            }
         }
     }
 
     /// Focus + raise `element` and pan the active output's view from `camera`
-    /// at `zoom` by the least amount that shows the element's frame whole,
-    /// `outer_gap` in from the usable edge.
+    /// at `zoom` by the least amount that shows `frame`, the element's frame,
+    /// whole, `outer_gap` in from the usable edge.
     pub(super) fn pan_minimally_to_element(
         &mut self,
         element: &StageWindow,
+        frame: &SnapRect,
         camera: Point<f64, Logical>,
         zoom: f64,
     ) {
@@ -160,15 +165,12 @@ impl DriftWm {
         // As in `navigate_to_window_on`.
         self.hover_follows_camera = false;
 
-        let Some(frame) = self.reveal_frame(element) else {
-            return;
-        };
         // A border wider than `outer_gap` puts the inset past the usable edge,
         // which would leave the revealed frame clipped.
         let border = self.element_chrome(element).border;
         let inset = self.config.outer_frame_inset(border).max(0.0);
         let target =
-            minimal_reveal_camera(&frame, camera, zoom, self.usable_area_on(&output), inset);
+            minimal_reveal_camera(frame, camera, zoom, self.usable_area_on(&output), inset);
 
         // Through the anchor, not a bare `camera_target`: an anchor still armed
         // by the previous pan would steer the camera back every tick.
@@ -429,8 +431,12 @@ impl DriftWm {
         {
             return;
         }
+        let element = StageWindow::Client(window.clone());
+        let Some(frame) = self.reveal_frame(&element) else {
+            return;
+        };
         let (camera, zoom) = self.landing_view();
-        self.pan_minimally_to_element(&StageWindow::Client(window.clone()), camera, zoom);
+        self.pan_minimally_to_element(&element, &frame, camera, zoom);
     }
 
     /// Cancel any armed or deferred click-navigate. Clearing the deferred timer

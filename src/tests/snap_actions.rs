@@ -115,36 +115,43 @@ fn move_to_snap_nudges_a_lone_window_by_nudge_step() {
     }
 }
 
+/// Where `window`'s frame ends on screen, and where a frame riding the usable
+/// area's right edge, `outer_gap` canvas px in, ends.
+fn right_edges_on_screen(f: &mut Fixture, window: &Window) -> (f64, f64) {
+    let rect = f
+        .state()
+        .visual_frame_rect(&StageWindow::Client(window.clone()))
+        .unwrap();
+    let (camera, zoom) = (f.state().camera(), f.state().zoom());
+    let usable = f.state().get_usable_area();
+    let riding = (usable.loc.x + usable.size.w) as f64 - f.state().config.snap_outer_gap * zoom;
+    ((rect.x_high - camera.x) * zoom, riding)
+}
+
 /// A nudge out of view pans the way an edge pan does: just far enough to show
 /// the window whole again, so it rides the usable edge, `outer_gap` in, while
-/// the canvas scrolls under it.
+/// the canvas scrolls under it at the zoom it was at.
 #[test]
 fn move_to_snap_nudging_out_of_view_pans_just_enough() {
     let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 35\n"));
     f.add_output(1, (1920, 1080));
     let id = f.add_client();
-    // The right edge at 1898, 22 px in from the usable edge.
-    let (a, _) = window_at(&mut f, id, "a", (1498, 100), (400, 300));
+    // At zoom 0.5 the view spans 3840 canvas px: the right edge at 3806 sits
+    // 22 px short of where it rides, at 3828.
+    let (a, _) = window_at(&mut f, id, "a", (3406, 100), (400, 300));
     focus(&mut f, &a);
     park_view(&mut f, Point::from((0.0, 0.0)));
-    let usable = f.state().get_usable_area();
-    let riding = (usable.loc.x + usable.size.w) as f64 - f.state().config.snap_outer_gap;
-    let right_on_screen = |f: &mut Fixture| {
-        let rect = f
-            .state()
-            .visual_frame_rect(&StageWindow::Client(a.clone()))
-            .unwrap();
-        (rect.x_high - f.state().camera().x) * f.state().zoom()
-    };
+    f.state().with_output_state(|os| os.zoom = 0.5);
 
     act(&mut f, Action::MoveToSnap(Direction::Right));
-    assert_eq!(window_position(&mut f, &a), Point::from((1533, 100)));
+    assert_eq!(window_position(&mut f, &a), Point::from((3441, 100)));
     settle(&mut f);
-    assert_eq!(right_on_screen(&mut f), riding, "outer_gap in, not centred");
-    assert_eq!(f.state().camera(), Point::from((25.0, 0.0)));
-    assert_eq!(f.state().zoom(), 1.0);
+    let (right, riding) = right_edges_on_screen(&mut f, &a);
+    assert_eq!(right, riding, "outer_gap in, not centred");
+    assert_eq!(f.state().camera(), Point::from((13.0, 0.0)));
+    assert_eq!(f.state().zoom(), 0.5);
 
-    for camera_x in [60.0, 95.0] {
+    for camera_x in [48.0, 83.0] {
         act(&mut f, Action::MoveToSnap(Direction::Right));
         settle(&mut f);
         assert_eq!(
@@ -152,11 +159,8 @@ fn move_to_snap_nudging_out_of_view_pans_just_enough() {
             Point::from((camera_x, 0.0)),
             "the camera moves by the step"
         );
-        assert_eq!(
-            right_on_screen(&mut f),
-            riding,
-            "the window stays put on screen"
-        );
+        let (right, riding) = right_edges_on_screen(&mut f, &a);
+        assert_eq!(right, riding, "the window stays put on screen");
     }
 
     // A held key: each repeat lands before the previous pan has.
@@ -165,9 +169,56 @@ fn move_to_snap_nudging_out_of_view_pans_just_enough() {
     f.state().apply_camera_animation(TICK);
     act(&mut f, Action::MoveToSnap(Direction::Right));
     settle(&mut f);
-    assert_eq!(f.state().camera(), Point::from((165.0, 0.0)));
-    assert_eq!(right_on_screen(&mut f), riding);
-    assert_eq!(f.state().zoom(), 1.0);
+    assert_eq!(f.state().camera(), Point::from((153.0, 0.0)));
+    let (right, riding) = right_edges_on_screen(&mut f, &a);
+    assert_eq!(right, riding);
+    assert_eq!(f.state().zoom(), 0.5);
+}
+
+/// The pan shows the frame the window is drawn with, the one the in-view test
+/// judged: a client that kept its size rather than take the one last asked
+/// for rides the edge whole, not clipped by the difference.
+#[test]
+fn move_to_snap_nudging_out_of_view_shows_the_size_the_client_kept() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let (a, surface) = window_at(&mut f, id, "a", (1498, 100), (400, 300));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+    act(&mut f, Action::ShrinkWindow(Direction::Right));
+    assert_eq!(last_configured(&mut f, id, &surface), (380, 300));
+    ack_but_keep_size(&mut f, id, &surface);
+
+    act(&mut f, Action::MoveToSnap(Direction::Right));
+    act(&mut f, Action::MoveToSnap(Direction::Right));
+    settle(&mut f);
+    let (right, riding) = right_edges_on_screen(&mut f, &a);
+    assert_eq!(right, riding, "the 400 px it kept, outer_gap in");
+}
+
+/// A nudge during a flight pans from where the flight lands: a pan heading
+/// down still gets there.
+#[test]
+fn move_to_snap_nudging_out_of_view_mid_pan_lets_the_pan_land() {
+    let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 35\n"));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let (a, _) = window_at(&mut f, id, "a", (1498, 300), (400, 300));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+    act(&mut f, Action::PanViewport(Direction::Down));
+    f.state().apply_zoom_animation(TICK);
+    f.state().apply_camera_animation(TICK);
+    let camera = f.state().camera();
+    assert!(
+        camera.y > 0.0 && camera.y < 100.0,
+        "precondition: the pan is under way: {camera:?}"
+    );
+
+    act(&mut f, Action::MoveToSnap(Direction::Right));
+    settle(&mut f);
+    assert_eq!(f.state().camera(), Point::from((25.0, 100.0)));
 }
 
 /// `nudge_step` takes any non-negative `i32`, so the nudged position has to

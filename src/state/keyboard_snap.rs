@@ -79,8 +79,9 @@ impl DriftWm {
         } else {
             // As an edge pan carries a dragged window: it rides the usable
             // edge while the canvas scrolls under it, where parking every
-            // step would throw the view around.
-            self.pan_minimally_to_element(&element, camera, zoom);
+            // step would throw the view around. Shown at the size just judged,
+            // which a client that declined a resize is still drawn at.
+            self.pan_minimally_to_element(&element, &landed, camera, zoom);
         }
     }
 
