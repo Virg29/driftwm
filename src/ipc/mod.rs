@@ -32,8 +32,9 @@ const MAX_COMMAND_SIZE: usize = 4096;
 /// away, which also takes it off the level-triggered listener.
 const MAX_CONNECTIONS: usize = 64;
 
-/// Cap how long the writes answering one read may block in all, so a stuck
-/// or trickling reader can't hang the loop.
+/// Cap how long the writes of one reply may block in all, so a stuck or
+/// trickling reader can't hang the loop. It starts once the reply is ready, so
+/// a slow command (a large screenshot) doesn't eat into it.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Bounds on canvas coordinates and sizes in a request: what session restore
@@ -173,20 +174,19 @@ fn serve_connection(
         tracing::warn!("IPC command too large, disconnecting");
         return disconnect(stream, state);
     }
-    let deadline = Instant::now() + WRITE_TIMEOUT;
     while let Some(nl) = buffer.iter().position(|&b| b == b'\n') {
         let line: Vec<u8> = buffer.drain(..=nl).collect();
         // A half-written pushed event must be flushed before any
         // reply, or the reply lands mid-line and corrupts framing.
-        if flush_pending_events(stream, state, deadline).is_err() {
+        if flush_pending_events(stream, state).is_err() {
             return disconnect(stream, state);
         }
         let written = match serde_json::from_slice::<Request>(&line[..nl]) {
             // Needs the raw stream to register a push channel, so it's
             // handled here rather than through the stream-less dispatch.
-            Ok(Request::Subscribe) => subscribe(stream, state, deadline),
-            Ok(request) => write_reply(stream, &dispatch(request, state), deadline),
-            Err(e) => write_reply(stream, &Err(format!("invalid request: {e}")), deadline),
+            Ok(Request::Subscribe) => subscribe(stream, state),
+            Ok(request) => write_reply(stream, &dispatch(request, state)),
+            Err(e) => write_reply(stream, &Err(format!("invalid request: {e}"))),
         };
         if written.is_err() {
             return disconnect(stream, state);
@@ -207,17 +207,14 @@ fn disconnect(stream: &UnixStream, state: &mut DriftWm) -> PostAction {
 
 /// Blocking-flush any pushed-event bytes still pending on this connection's
 /// subscription (the client is mid-request, so it's reading).
-fn flush_pending_events(
-    stream: &UnixStream,
-    state: &mut DriftWm,
-    deadline: Instant,
-) -> std::io::Result<()> {
+fn flush_pending_events(stream: &UnixStream, state: &mut DriftWm) -> std::io::Result<()> {
     let fd = stream.as_raw_fd();
     let Some(sub) = state.ipc_subscribers.iter_mut().find(|s| s.fd == fd) else {
         return Ok(());
     };
     let partial = std::mem::take(&mut sub.partial);
     let queued = sub.queued.take();
+    let deadline = Instant::now() + WRITE_TIMEOUT;
     if !partial.is_empty() {
         write_line(stream, &partial, deadline)?;
     }
@@ -1197,42 +1194,52 @@ fn union_rect(a: Rectangle<i32, Logical>, b: Rectangle<i32, Logical>) -> Rectang
     Rectangle::new((x0, y0).into(), (x1 - x0, y1 - y0).into())
 }
 
-/// Serialize and send a reply over `stream`.
-fn write_reply(stream: &UnixStream, reply: &Reply, deadline: Instant) -> std::io::Result<()> {
+/// Serialize and send a reply over `stream`, within [`WRITE_TIMEOUT`].
+fn write_reply(stream: &UnixStream, reply: &Reply) -> std::io::Result<()> {
     let mut bytes = serde_json::to_vec(reply)?;
     bytes.push(b'\n');
-    write_line(stream, &bytes, deadline)
+    write_line(stream, &bytes, Instant::now() + WRITE_TIMEOUT)
 }
 
-/// Send a pre-serialized line on the request/reply path. Switches to a blocking
-/// write so a large payload isn't truncated on `WouldBlock`, gives up at
-/// `deadline` however the reader paces itself, then restores nonblocking.
-fn write_line(stream: &UnixStream, bytes: &[u8], deadline: Instant) -> std::io::Result<()> {
-    stream.set_nonblocking(false).ok();
-    let res = write_all_by(stream, bytes, deadline);
-    stream.set_nonblocking(true).ok();
-    res
-}
-
-fn write_all_by(
-    mut stream: &UnixStream,
-    mut bytes: &[u8],
-    deadline: Instant,
-) -> std::io::Result<()> {
+/// Send a pre-serialized line on the request/reply path, waiting out a full
+/// socket so a large payload isn't truncated, but only until `deadline`. The
+/// stream stays nonblocking: a blocking write's `SO_SNDTIMEO` bounds each wait
+/// for buffer space, so a reader draining a little at a time could hold one
+/// write for as long as it liked.
+fn write_line(mut stream: &UnixStream, mut bytes: &[u8], deadline: Instant) -> std::io::Result<()> {
     while !bytes.is_empty() {
-        let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return Err(ErrorKind::TimedOut.into());
-        }
-        stream.set_write_timeout(Some(left))?;
         match stream.write(bytes) {
             Ok(0) => return Err(ErrorKind::WriteZero.into()),
             Ok(n) => bytes = &bytes[n..],
             Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) if e.kind() == ErrorKind::WouldBlock => wait_writable(stream, deadline)?,
             Err(e) => return Err(e),
         }
     }
     Ok(())
+}
+
+/// Wait until `stream` takes more bytes, failing once `deadline` passes.
+fn wait_writable(stream: &UnixStream, deadline: Instant) -> std::io::Result<()> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        return Err(ErrorKind::TimedOut.into());
+    }
+    let mut pollfd = libc::pollfd {
+        fd: stream.as_raw_fd(),
+        events: libc::POLLOUT,
+        revents: 0,
+    };
+    let ms = left.as_millis().clamp(1, i32::MAX as u128) as i32;
+    // SAFETY: one valid pollfd, alive for the whole call.
+    match unsafe { libc::poll(&mut pollfd, 1, ms) } {
+        0 => Err(ErrorKind::TimedOut.into()),
+        -1 => match std::io::Error::last_os_error() {
+            e if e.kind() == ErrorKind::Interrupted => Ok(()),
+            e => Err(e),
+        },
+        _ => Ok(()),
+    }
 }
 
 /// A subscribed IPC connection: the serving stream's fd (for dedup and
@@ -1252,21 +1259,21 @@ pub struct Subscriber {
 /// future pushes. A repeat on an already-subscribed connection just re-sends the
 /// snapshot (deduped by the serving stream's fd). A failed `try_clone` replies
 /// `Err` and registers nothing.
-fn subscribe(stream: &UnixStream, state: &mut DriftWm, deadline: Instant) -> std::io::Result<()> {
+fn subscribe(stream: &UnixStream, state: &mut DriftWm) -> std::io::Result<()> {
     // Clone the write half before acking, so a clone failure surfaces as an
     // error reply rather than a silently half-registered subscriber.
     let clone = match stream.try_clone() {
         Ok(c) => c,
         Err(e) => {
-            return write_reply(stream, &Err(format!("cannot subscribe: {e}")), deadline);
+            return write_reply(stream, &Err(format!("cannot subscribe: {e}")));
         }
     };
-    write_reply(stream, &Ok(Response::Ok), deadline)?;
+    write_reply(stream, &Ok(Response::Ok))?;
     // The initial snapshot may block (bounded): the client just asked for it,
     // so it's reading — same guarantee a `state` reply gets.
     let mut bytes = serde_json::to_vec(&Event::State(state_info(state)))?;
     bytes.push(b'\n');
-    write_line(stream, &bytes, deadline)?;
+    write_line(stream, &bytes, Instant::now() + WRITE_TIMEOUT)?;
     let fd = stream.as_raw_fd();
     if !state.ipc_subscribers.iter().any(|s| s.fd == fd) {
         state.ipc_subscribers.push(Subscriber {
@@ -1377,34 +1384,33 @@ fn camera_center(state: &DriftWm) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::{layout_code, write_line};
-    use std::io::{ErrorKind, Read};
+    use std::io::Read;
     use std::os::unix::net::UnixStream;
     use std::time::{Duration, Instant};
 
     #[test]
-    fn a_reply_to_a_stuck_reader_gives_up_at_its_deadline() {
-        let (server, _peer) = UnixStream::pair().unwrap();
+    fn a_reply_to_a_trickling_reader_gives_up_at_its_deadline_in_total() {
+        let (server, mut peer) = UnixStream::pair().unwrap();
         server.set_nonblocking(true).unwrap();
+        // Draining a little at a time keeps every single write making progress,
+        // so only a bound across all of them can end it.
+        let reader = std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while matches!(peer.read(&mut buf), Ok(n) if n > 0) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
         let start = Instant::now();
-        // Far past what the socket buffers, so the write has to wait on the peer.
-        let reply = vec![b'x'; 16 << 20];
-        let deadline = start + Duration::from_millis(100);
+        let reply = vec![b'x'; 32 << 20];
+        let deadline = start + Duration::from_millis(300);
         assert!(write_line(&server, &reply, deadline).is_err());
         assert!(
-            start.elapsed() < Duration::from_millis(700),
+            start.elapsed() < Duration::from_millis(1500),
             "gave up after {:?}",
             start.elapsed()
         );
-    }
-
-    #[test]
-    fn nothing_is_written_past_the_deadline() {
-        let (server, mut peer) = UnixStream::pair().unwrap();
-        server.set_nonblocking(true).unwrap();
-        assert!(write_line(&server, b"late\n", Instant::now()).is_err());
-        peer.set_nonblocking(true).unwrap();
-        let read = peer.read(&mut [0u8; 8]);
-        assert!(matches!(read, Err(e) if e.kind() == ErrorKind::WouldBlock));
+        drop(server);
+        reader.join().unwrap();
     }
 
     #[test]
