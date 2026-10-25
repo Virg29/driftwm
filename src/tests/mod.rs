@@ -78,6 +78,7 @@ mod session_lock;
 mod session_restore;
 mod snap_actions;
 mod soak;
+mod spawn;
 mod stand_in_parity;
 mod suspend_flows;
 mod suspended;
