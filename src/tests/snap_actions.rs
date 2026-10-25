@@ -175,6 +175,85 @@ fn move_to_snap_nudging_out_of_view_pans_just_enough() {
     assert_eq!(f.state().zoom(), 0.5);
 }
 
+/// The follow starts at the line it pans to: a step smaller than `outer_gap`
+/// scrolls the canvas by the step with the window held on the line, never
+/// creeping into the margin and then jumping back out of it.
+#[test]
+fn move_to_snap_nudging_by_less_than_outer_gap_scrolls_by_the_step() {
+    let mut f = Fixture::with_config(config(
+        "[navigation]\nnudge_step = 5\n[snap]\nouter_gap = 12.0\n",
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    // The frame's right edge sits on the line, 12 px in from 1920.
+    let (a, _) = window_at(&mut f, id, "a", (1508, 300), (400, 300));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+
+    for camera_x in [5.0, 10.0, 15.0, 20.0] {
+        act(&mut f, Action::MoveToSnap(Direction::Right));
+        settle(&mut f);
+        assert_eq!(f.state().camera(), Point::from((camera_x, 0.0)));
+        let (right, riding) = right_edges_on_screen(&mut f, &a);
+        assert_eq!(right, riding, "held on the line");
+    }
+}
+
+/// The same leftward, where the line lies `outer_gap` in from the usable
+/// area's left edge.
+#[test]
+fn move_to_snap_nudging_left_by_less_than_outer_gap_scrolls_by_the_step() {
+    let mut f = Fixture::with_config(config(
+        "[navigation]\nnudge_step = 5\n[snap]\nouter_gap = 12.0\n",
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let (a, _) = window_at(&mut f, id, "a", (12, 300), (400, 300));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+
+    for camera_x in [-5.0, -10.0, -15.0] {
+        act(&mut f, Action::MoveToSnap(Direction::Left));
+        settle(&mut f);
+        assert_eq!(f.state().camera(), Point::from((camera_x, 0.0)));
+        let rect = f
+            .state()
+            .visual_frame_rect(&StageWindow::Client(a.clone()))
+            .unwrap();
+        assert_eq!(rect.x_low - camera_x, 12.0, "held on the line");
+    }
+}
+
+/// Only the edge leading the move starts a follow: a window in the margin
+/// against the right edge, nudged left, leaves the camera alone; nudged
+/// right, its first press settles it on the line and the rest scroll by the
+/// step.
+#[test]
+fn move_to_snap_nudging_a_window_in_the_margin_follows_only_its_leading_edge() {
+    let mut f = Fixture::with_config(config(
+        "[navigation]\nnudge_step = 5\n[snap]\nouter_gap = 12.0\n",
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    // Flush against the usable right edge.
+    let (a, _) = window_at(&mut f, id, "a", (1520, 300), (400, 300));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+
+    act(&mut f, Action::MoveToSnap(Direction::Left));
+    assert_eq!(window_position(&mut f, &a), Point::from((1515, 300)));
+    assert!(f.state().camera_target().is_none() && f.state().zoom_target().is_none());
+    assert_eq!(f.state().camera(), Point::from((0.0, 0.0)));
+
+    for camera_x in [12.0, 17.0, 22.0] {
+        act(&mut f, Action::MoveToSnap(Direction::Right));
+        settle(&mut f);
+        assert_eq!(f.state().camera(), Point::from((camera_x, 0.0)));
+        let (right, riding) = right_edges_on_screen(&mut f, &a);
+        assert_eq!(right, riding, "held on the line");
+    }
+}
+
 /// The pan shows the frame the window is drawn with, the one the in-view test
 /// judged: a client that kept its size rather than take the one last asked
 /// for rides the edge whole, not clipped by the difference.
@@ -266,36 +345,70 @@ fn move_to_snap_nudging_a_too_tall_window_within_view_leaves_the_camera_alone() 
 }
 
 /// The same down the screen: a window too wide for the view, nudged down,
-/// leaves the camera alone while it is in view vertically, then scrolls the
-/// canvas down and never across.
+/// leaves the camera alone while its bottom edge stays short of the line,
+/// then scrolls the canvas down and never across.
 #[test]
 fn move_to_snap_nudging_a_too_wide_window_down_pans_only_down() {
     let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 35\n"));
     f.add_output(1, (1920, 1080));
     let id = f.add_client();
     // Centred across, the camera would sit at x -60.
-    let (a, _) = window_at(&mut f, id, "a", (-100, 740), (2000, 300));
+    let (a, _) = window_at(&mut f, id, "a", (-100, 730), (2000, 300));
     focus(&mut f, &a);
     park_view(&mut f, Point::from((0.0, 0.0)));
 
     act(&mut f, Action::MoveToSnap(Direction::Down));
-    assert_eq!(window_position(&mut f, &a), Point::from((-100, 775)));
+    assert_eq!(window_position(&mut f, &a), Point::from((-100, 765)));
     assert!(f.state().camera_target().is_none() && f.state().zoom_target().is_none());
 
     act(&mut f, Action::MoveToSnap(Direction::Down));
     settle(&mut f);
     assert_eq!(
         f.state().camera(),
-        Point::from((0.0, 42.0)),
-        "the bottom edge, at 1110, outer_gap in from 1080"
+        Point::from((0.0, 32.0)),
+        "the bottom edge, at 1100, outer_gap in from 1080"
     );
 }
 
-/// At zoom 0.5 the view spans 3840 x 2160 canvas px, which a 4000 x 2200
-/// window overflows both ways. Each nudge re-centres it across, so the camera
-/// moves with it press by press, and never vertically; the zoom holds.
+/// A window wider than the view rides the line too, its left part left off
+/// screen rather than centred: nudged right while its right edge is short of
+/// the line, it leaves the camera alone, then holds that edge on the line
+/// press by press.
 #[test]
-fn move_to_snap_nudging_a_window_too_big_both_ways_follows_it_across_only() {
+fn move_to_snap_nudging_a_too_wide_window_rides_its_leading_edge_on_the_line() {
+    let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 35\n"));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    // The right edge, at 1800, lies 108 px short of the line.
+    let (a, _) = window_at(&mut f, id, "a", (-600, 300), (2400, 300));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+
+    for _ in 0..3 {
+        act(&mut f, Action::MoveToSnap(Direction::Right));
+        assert!(f.state().camera_target().is_none() && f.state().zoom_target().is_none());
+    }
+    assert_eq!(window_position(&mut f, &a), Point::from((-495, 300)));
+
+    for camera_x in [32.0, 67.0, 102.0] {
+        act(&mut f, Action::MoveToSnap(Direction::Right));
+        settle(&mut f);
+        assert_eq!(
+            f.state().camera(),
+            Point::from((camera_x, 0.0)),
+            "no centring jump"
+        );
+        let (right, riding) = right_edges_on_screen(&mut f, &a);
+        assert_eq!(right, riding, "held on the line");
+    }
+}
+
+/// At zoom 0.5 the view spans 3840 x 2160 canvas px, which a 4000 x 2200
+/// window overflows both ways. Its right edge, past the line from the start,
+/// rides it press by press, and the camera never moves vertically; the zoom
+/// holds.
+#[test]
+fn move_to_snap_nudging_a_window_too_big_both_ways_rides_its_right_edge_across_only() {
     let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 35\n"));
     f.add_output(1, (1920, 1080));
     let id = f.add_client();
@@ -304,11 +417,13 @@ fn move_to_snap_nudging_a_window_too_big_both_ways_follows_it_across_only() {
     park_view(&mut f, Point::from((0.0, 0.0)));
     f.state().with_output_state(|os| os.zoom = 0.5);
 
-    // The frame's centre, 2000 canvas px in, sits 1920 in from the camera.
-    for camera_x in [115.0, 150.0, 185.0] {
+    // The line lies 3828 canvas px in from the camera.
+    for camera_x in [207.0, 242.0, 277.0] {
         act(&mut f, Action::MoveToSnap(Direction::Right));
         settle(&mut f);
         assert_eq!(f.state().camera(), Point::from((camera_x, 0.0)));
+        let (right, riding) = right_edges_on_screen(&mut f, &a);
+        assert_eq!(right, riding, "held on the line");
         assert_eq!(f.state().zoom(), 0.5);
     }
 }

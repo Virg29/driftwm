@@ -50,7 +50,7 @@ use edge_pan::EdgePanDelay;
 pub use errors::ErrorSource;
 pub use focus::{FocusIntent, FocusTarget};
 pub use layers::CanvasLayer;
-pub(crate) use navigation::{Axes, CLICK_NAVIGATE_SLOP};
+pub(crate) use navigation::{CLICK_NAVIGATE_SLOP, MinimalPan};
 pub use navigation::{NavZoom, RevealPan};
 pub use persistence::{read_all_per_output_state, remove_state_file};
 pub use render_cache::{BorderCacheEntry, RenderCache, ShadowCacheEntry};

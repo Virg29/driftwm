@@ -524,6 +524,43 @@ pub fn minimal_reveal_camera(
     ))
 }
 
+/// The camera nearest `camera` that keeps `frame`'s edge leading a move, along
+/// x if `horizontal` and toward higher coordinates if `forward`, from passing
+/// the line `inset` canvas px in from the `usable` (screen px) edge ahead, at
+/// `zoom`. Only that axis moves; a frame too big for the view rides the line
+/// like any other.
+pub fn leading_edge_camera(
+    frame: &SnapRect,
+    camera: Point<f64, Logical>,
+    zoom: f64,
+    usable: Rectangle<i32, Logical>,
+    inset: f64,
+    horizontal: bool,
+    forward: bool,
+) -> Point<f64, Logical> {
+    let (along, low, high) = if horizontal {
+        (camera.x, frame.x_low, frame.x_high)
+    } else {
+        (camera.y, frame.y_low, frame.y_high)
+    };
+    let (usable_low, usable_span) = if horizontal {
+        (usable.loc.x, usable.size.w)
+    } else {
+        (usable.loc.y, usable.size.h)
+    };
+    let (usable_low, usable_span) = (usable_low as f64 / zoom, usable_span as f64 / zoom);
+    let along = if forward {
+        along.max(high - (usable_low + usable_span - inset))
+    } else {
+        along.min(low - (usable_low + inset))
+    };
+    if horizontal {
+        Point::from((along, camera.y))
+    } else {
+        Point::from((camera.x, along))
+    }
+}
+
 /// Snap zoom to 1.0 if within ±0.05 dead zone (avoids stuck-near-1.0 feel).
 pub fn snap_zoom(z: f64) -> f64 {
     if (z - 1.0).abs() < 0.05 { 1.0 } else { z }
@@ -1442,5 +1479,42 @@ mod tests {
         // screen 1910, i.e. canvas 4000 = camera + 1910 / 0.5.
         let camera = minimal_reveal_camera(&frame, cam(0.0, 0.0), 0.5, usable, 20.0);
         assert_eq!(camera, cam(4000.0 - 3820.0, 0.0));
+    }
+
+    #[test]
+    fn leading_edge_holds_an_edge_short_of_its_line_in_canvas_px() {
+        let usable = usable_rect(0, 0, 1920, 1080);
+        // Too wide for the view at zoom 0.5, its left part off screen. The
+        // 20 px inset shows as 10, so the line lies at canvas 3820.
+        let frame = snap_rect(-1185.0, 100.0, 5000.0, 200.0);
+        let camera = leading_edge_camera(&frame, cam(0.0, 0.0), 0.5, usable, 20.0, true, true);
+        assert_eq!(camera, cam(0.0, 0.0));
+    }
+
+    #[test]
+    fn leading_edge_puts_each_leading_edge_on_its_line() {
+        let usable = usable_rect(0, 40, 1920, 1040);
+        // Past all four lines at once, too big for the view both ways.
+        let frame = snap_rect(-100.0, 0.0, 2200.0, 1200.0);
+        for (horizontal, forward, expected) in [
+            (true, true, cam(2100.0 - 1900.0, 0.0)),
+            (true, false, cam(-100.0 - 20.0, 0.0)),
+            (false, true, cam(0.0, 1200.0 - 1060.0)),
+            (false, false, cam(0.0, 0.0 - 60.0)),
+        ] {
+            let camera = leading_edge_camera(
+                &frame,
+                cam(0.0, 0.0),
+                1.0,
+                usable,
+                20.0,
+                horizontal,
+                forward,
+            );
+            assert_eq!(
+                camera, expected,
+                "horizontal {horizontal}, forward {forward}"
+            );
+        }
     }
 }

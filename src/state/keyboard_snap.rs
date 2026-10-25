@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use smithay::utils::{Logical, Point};
 
-use super::{Axes, DriftWm, NavZoom, StageWindow};
+use super::{DriftWm, MinimalPan, NavZoom, StageWindow};
 use driftwm::config::Direction;
 use driftwm::layout::snap::{self, SnapRect, StopQuery};
 
@@ -14,7 +14,8 @@ impl DriftWm {
     /// Move the focused canvas element along `dir` to the nearest stop past
     /// where it sits, and bring the camera along if that leaves the viewport.
     /// With no stop that way it nudges by `nudge_step` instead, the camera
-    /// panning just enough to show it along the move.
+    /// scrolling along with it once its leading edge reaches `outer_gap` from
+    /// the usable edge.
     pub(crate) fn move_to_snap_focused(&mut self, dir: &Direction) {
         let Some((horizontal, forward)) = axis_of(dir) else {
             return;
@@ -72,19 +73,22 @@ impl DriftWm {
         let (camera, zoom) = self.landing_view();
         let landed = super::fit::snap_rect_at(new_loc, size, bar, bw);
         if stop.is_some() {
-            if !self.frame_fully_in_view_at(&landed, camera, zoom, Axes::Both) {
+            if !self.frame_fully_in_view_at(&landed, camera, zoom) {
                 self.navigate_to_element(&element, NavZoom::Keep);
             }
             return;
         }
-        // As an edge pan carries a dragged window: it rides the usable edge
-        // while the canvas scrolls under it, only the way the window went,
-        // where parking every step would throw the view around. Shown at the
-        // size just judged, which a client that declined a resize is still
-        // drawn at.
-        let along = Axes::Only { horizontal };
-        if !self.frame_fully_in_view_at(&landed, camera, zoom, along) {
-            self.pan_minimally_to_element(&element, &landed, camera, zoom, along);
+        // As an edge pan carries a dragged window: once its leading edge
+        // reaches the line the pan holds it on, it rides there while the
+        // canvas scrolls under it, only the way the window went, where parking
+        // every step would throw the view around. Shown at the size just
+        // judged, which a client that declined a resize is still drawn at.
+        let pan = MinimalPan::LeadingEdge {
+            horizontal,
+            forward,
+        };
+        if self.minimal_pan_moves(&element, &landed, camera, zoom, pan) {
+            self.pan_minimally_to_element(&element, &landed, camera, zoom, pan);
         }
     }
 
