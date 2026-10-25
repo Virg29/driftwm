@@ -118,6 +118,56 @@ fn click_on_clipped_window_scrolls_it_just_into_view() {
     assert_eq!(camera.y, 0.0, "the other axis held");
 }
 
+/// A click on a window hanging off a corner scrolls it in along both axes,
+/// each edge `outer_gap` in from the screen's.
+#[test]
+fn click_on_a_window_clipped_at_a_corner_scrolls_it_in_both_ways() {
+    let mut f = Fixture::with_config(
+        Config::from_toml(
+            r#"
+            [navigation]
+            auto_navigate_on_click = true
+            [snap]
+            outer_gap = 20.0
+        "#,
+        )
+        .unwrap(),
+    );
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "clip", (300, 200));
+    let window = window_by_app_id(&mut f, "clip").unwrap();
+    let elem = StageWindow::Client(window.clone());
+    f.state()
+        .map_window(elem.clone(), Point::from((1750, 950)), false);
+    f.state().with_output_state(|os| {
+        os.camera = Point::from((0.0, 0.0));
+        os.camera_target = None;
+        os.zoom = 1.0;
+        os.zoom_target = None;
+        os.zoom_animation_anchor = None;
+    });
+    focus(&mut f, &window);
+
+    let press = Point::from((1800.0, 1000.0));
+    f.state()
+        .arm_click_navigate(&window, press, BTN_LEFT, false);
+    f.state().resolve_click_navigate(BTN_LEFT, press);
+    settle(&mut f);
+
+    let frame = f.state().visual_frame_rect(&elem).unwrap();
+    let camera = f.state().camera();
+    let (right, bottom) = (frame.x_high - camera.x, frame.y_high - camera.y);
+    assert!(
+        (right - (1920.0 - 20.0)).abs() < 1e-6,
+        "the right edge lands outer_gap in: {right}"
+    );
+    assert!(
+        (bottom - (1080.0 - 20.0)).abs() < 1e-6,
+        "the bottom edge lands outer_gap in: {bottom}"
+    );
+}
+
 /// A click on a window shown whole leaves a camera flight under way alone, even
 /// one heading where the window will be clipped.
 #[test]
