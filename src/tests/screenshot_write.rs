@@ -83,6 +83,11 @@ fn a_symlink_at_the_target_is_replaced_not_written_through() {
 #[test]
 #[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
 fn a_capture_that_cannot_be_written_leaves_the_target_as_it_was() {
+    // SAFETY: geteuid has no preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("skipping read-only dir: root writes through directory permissions");
+        return;
+    }
     let _gl = gl::lock();
     let Some(mut f) = setup("screenshot into a read-only dir") else {
         return;
