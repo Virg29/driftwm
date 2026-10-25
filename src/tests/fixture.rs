@@ -163,8 +163,18 @@ impl Fixture {
     }
 
     pub fn add_client(&mut self) -> ClientId {
+        self.connect_client(false)
+    }
+
+    /// A client connected through a security-context listener — a sandboxed
+    /// app, denied the privileged globals.
+    pub fn add_restricted_client(&mut self) -> ClientId {
+        self.connect_client(true)
+    }
+
+    fn connect_client(&mut self, restricted: bool) -> ClientId {
         let (sock1, sock2) = UnixStream::pair().unwrap();
-        self.state.server.insert_client(sock1);
+        self.state.server.insert_client(sock1, restricted);
 
         let client = Client::new(sock2);
         let id = client.id;

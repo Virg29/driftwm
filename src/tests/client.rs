@@ -782,7 +782,13 @@ impl Client {
     /// spontaneous attention request). The token string arrives asynchronously
     /// via `done`; roundtrip before calling [`Client::activate`].
     pub fn request_activation_token(&mut self, requester: &WlSurface, with_serial: bool) {
-        self.state.request_activation_token(requester, with_serial);
+        self.state
+            .request_activation_token(requester, with_serial.then_some(1));
+    }
+
+    /// [`Client::request_activation_token`] citing a specific seat `serial`.
+    pub fn request_activation_token_with_serial(&mut self, requester: &WlSurface, serial: u32) {
+        self.state.request_activation_token(requester, Some(serial));
     }
 
     /// Register `toplevel` as an xdg-dialog; the returned object carries the
@@ -1335,12 +1341,12 @@ impl State {
             .unwrap()
     }
 
-    pub fn request_activation_token(&mut self, requester: &WlSurface, with_serial: bool) {
+    pub fn request_activation_token(&mut self, requester: &WlSurface, serial: Option<u32>) {
         let activation = self.xdg_activation.as_ref().unwrap();
         let token = activation.get_activation_token(&self.qh, ());
-        if with_serial {
+        if let Some(serial) = serial {
             let seat = self.seat.as_ref().unwrap();
-            token.set_serial(1, seat);
+            token.set_serial(serial, seat);
         }
         token.set_surface(requester);
         token.commit();

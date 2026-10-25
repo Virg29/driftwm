@@ -242,12 +242,88 @@ impl FractionalScaleHandler for DriftWm {
     }
 }
 
+/// How long a client-minted activation token stays valid. A relaunch token
+/// keeps its own deadline instead.
+const ACTIVATION_TOKEN_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+/// Most client-minted activation tokens held at once; the oldest go first.
+const MAX_ACTIVATION_TOKENS: usize = 256;
+
+fn is_relaunch_token(data: &XdgActivationTokenData) -> bool {
+    data.user_data
+        .get::<crate::state::RelaunchMarker>()
+        .is_some()
+}
+
+fn activation_token_expired(data: &XdgActivationTokenData) -> bool {
+    !is_relaunch_token(data) && data.timestamp.elapsed() >= ACTIVATION_TOKEN_TTL
+}
+
+/// Drop expired client tokens, then the oldest past the cap. Leaves room for
+/// the token being created, which smithay inserts after `token_created`.
+fn prune_activation_tokens(state: &mut XdgActivationState) {
+    state.retain_tokens(|_, data| !activation_token_expired(data));
+    let mut held: Vec<(XdgActivationToken, std::time::Instant)> = state
+        .tokens()
+        .filter(|(_, data)| !is_relaunch_token(data))
+        .map(|(token, data)| (token.clone(), data.timestamp))
+        .collect();
+    if held.len() < MAX_ACTIVATION_TOKENS {
+        return;
+    }
+    held.sort_unstable_by_key(|(_, minted)| *minted);
+    for (token, _) in &held[..=held.len() - MAX_ACTIVATION_TOKENS] {
+        state.remove_token(token);
+    }
+}
+
+impl DriftWm {
+    /// Whether a token minted by a sandboxed client may grant focus: it has to
+    /// cite a serial no older than the keyboard's last enter, while the client
+    /// holds the keyboard. The client picks the serial, so it could cite one
+    /// ahead of any enter; holding the keyboard is what that can't fake.
+    fn restricted_token_grants_focus(&self, data: &XdgActivationTokenData) -> bool {
+        let Some((serial, _)) = data.serial else {
+            return false;
+        };
+        let keyboard = self.seat.get_keyboard().unwrap();
+        let holds_keyboard = keyboard
+            .current_focus()
+            .and_then(|focus| focus.0.client())
+            .is_some_and(|client| Some(client.id()) == data.client_id);
+        holds_keyboard
+            && keyboard
+                .last_enter()
+                .is_some_and(|enter| serial.is_no_older_than(&enter))
+    }
+}
+
 impl XdgActivationHandler for DriftWm {
     fn activation_state(&mut self) -> &mut XdgActivationState {
         &mut self.xdg_activation_state
     }
 
     fn token_created(&mut self, _token: XdgActivationToken, data: XdgActivationTokenData) -> bool {
+        prune_activation_tokens(&mut self.xdg_activation_state);
+        // Unlike `client_is_unrestricted`, a client without `ClientState`
+        // counts as sandboxed here.
+        let unrestricted = data
+            .client_id
+            .clone()
+            .and_then(|id| {
+                self.display_handle
+                    .backend_handle()
+                    .get_client_data(id)
+                    .ok()
+            })
+            .and_then(|client| {
+                client
+                    .downcast_ref::<crate::state::ClientState>()
+                    .map(|state| !state.is_restricted)
+            })
+            .unwrap_or(false);
+        if !unrestricted && !self.restricted_token_grants_focus(&data) {
+            return false;
+        }
         if data.serial.is_some() {
             let now = std::time::Instant::now();
             self.cursor.exec_cursor_show_at = Some(now + std::time::Duration::from_millis(150));
@@ -258,7 +334,7 @@ impl XdgActivationHandler for DriftWm {
 
     fn request_activation(
         &mut self,
-        _token: XdgActivationToken,
+        token: XdgActivationToken,
         token_data: XdgActivationTokenData,
         surface: WlSurface,
     ) {
@@ -313,6 +389,12 @@ impl XdgActivationHandler for DriftWm {
             }
         }
 
+        // smithay never expires a token itself.
+        if activation_token_expired(&token_data) {
+            self.xdg_activation_state.remove_token(&token);
+            return;
+        }
+
         // Only honor tokens created from user input (has a serial).
         // Tokens without a serial are spontaneous attention requests from
         // background apps — ignore those to prevent focus stealing.
@@ -334,6 +416,7 @@ impl XdgActivationHandler for DriftWm {
                 return;
             }
             self.activate_window_output_local(&window);
+            self.xdg_activation_state.remove_token(&token);
         }
     }
 }
