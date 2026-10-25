@@ -177,7 +177,7 @@ impl DriftWm {
         // side carries it forward verbatim (so flipping the flag on later loses
         // nothing), and with it on we overlay it onto the config seeds here — a
         // restored value wins per name, config seeds fill the names the file lacks.
-        self.session_store.durable_bookmarks = envelope.bookmarks;
+        self.session_store.durable_bookmarks = bounded_bookmarks(envelope.bookmarks);
         if self.config.session.restore_bookmarks {
             let overlay = self.session_store.durable_bookmarks.clone();
             for (name, value) in overlay {
@@ -734,18 +734,84 @@ fn valid_entry_geometry(entry: &SessionEntry) -> bool {
     ok
 }
 
+/// The canvas range a camera or bookmark point may lie in. Far past it an
+/// `f64` no longer resolves half a pixel, so a camera flight there never
+/// arrives.
+pub(crate) const CAMERA_LIMIT: f64 = 1e9;
+
 /// Whether a durable/runtime camera seed is safe to apply: finite components
 /// within a sane canvas range and a zoom inside the real zoom bounds. An
 /// invalid seed (`zoom: 0.0`, non-finite, corruption) is skipped so it can't
 /// warp the pointer to infinity or divide every canvas conversion by zero.
 pub(crate) fn valid_camera_seed(camera: Point<f64, Logical>, zoom: f64) -> bool {
-    const CAMERA_LIMIT: f64 = 1e9;
-    camera.x.is_finite()
-        && camera.y.is_finite()
-        && camera.x.abs() <= CAMERA_LIMIT
-        && camera.y.abs() <= CAMERA_LIMIT
+    valid_canvas_point(camera.x, camera.y)
         && zoom.is_finite()
         && (driftwm::canvas::MIN_ZOOM_FLOOR..=driftwm::canvas::MAX_ZOOM).contains(&zoom)
+}
+
+/// Finite and within [`CAMERA_LIMIT`] on both axes.
+pub(crate) fn valid_canvas_point(x: f64, y: f64) -> bool {
+    x.is_finite() && y.is_finite() && x.abs() <= CAMERA_LIMIT && y.abs() <= CAMERA_LIMIT
+}
+
+/// The registry takes no new name past this many bookmarks.
+pub(crate) const MAX_BOOKMARKS: usize = 256;
+/// Longest bookmark name, in bytes.
+pub(crate) const MAX_BOOKMARK_NAME: usize = 256;
+
+/// Why bookmark `name` at `[x, y]` can't be held, if it can't: the registry's
+/// bounds, shared by every way a bookmark is set.
+fn bookmark_problem(name: &str, [x, y]: [f64; 2]) -> Option<String> {
+    if name.len() > MAX_BOOKMARK_NAME {
+        return Some(format!(
+            "bookmark names are at most {MAX_BOOKMARK_NAME} bytes"
+        ));
+    }
+    if !x.is_finite() || !y.is_finite() {
+        return Some("bookmark coordinates must be finite".to_string());
+    }
+    if !valid_canvas_point(x, y) {
+        return Some(format!(
+            "bookmark coordinates must be within ±{CAMERA_LIMIT:e}"
+        ));
+    }
+    None
+}
+
+/// A saved registry cut to what [`DriftWm::set_bookmark`] would have
+/// accepted, so a corrupt or hand-edited session can't restore past it.
+fn bounded_bookmarks(saved: BTreeMap<String, [f64; 2]>) -> BTreeMap<String, [f64; 2]> {
+    let total = saved.len();
+    let kept: BTreeMap<_, _> = saved
+        .into_iter()
+        .filter(|(name, point)| bookmark_problem(name, *point).is_none())
+        .take(MAX_BOOKMARKS)
+        .collect();
+    if kept.len() < total {
+        tracing::warn!(
+            "session store: dropped {} of {total} saved bookmarks out of bounds",
+            total - kept.len()
+        );
+    }
+    kept
+}
+
+impl DriftWm {
+    /// Set bookmark `name` to `point`, refusing a new name once the registry
+    /// holds [`MAX_BOOKMARKS`], and an overlong name or out-of-range point.
+    pub(crate) fn set_bookmark(&mut self, name: String, point: [f64; 2]) -> Result<(), String> {
+        if let Some(problem) = bookmark_problem(&name, point) {
+            return Err(problem);
+        }
+        if !self.bookmarks.contains_key(&name) && self.bookmarks.len() >= MAX_BOOKMARKS {
+            return Err(format!(
+                "at most {MAX_BOOKMARKS} bookmarks can be set; delete one first"
+            ));
+        }
+        self.bookmarks.insert(name, point);
+        self.session_store_mark_dirty();
+        Ok(())
+    }
 }
 
 #[cfg(test)]

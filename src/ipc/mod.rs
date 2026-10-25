@@ -30,6 +30,29 @@ const MAX_COMMAND_SIZE: usize = 4096;
 /// Cap how long a reply write may block, so a stuck reader can't hang the loop.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// Bounds on canvas coordinates and sizes in a request: what session restore
+/// accepts, and what the `i32` canvas math holds once chrome and centering are
+/// added.
+const COORD_LIMIT: i32 = 16_000_000;
+const SIZE_LIMIT: i32 = 32767;
+
+fn check_point(x: i32, y: i32) -> Result<(), String> {
+    let range = -COORD_LIMIT..=COORD_LIMIT;
+    if range.contains(&x) && range.contains(&y) {
+        Ok(())
+    } else {
+        Err(format!("coordinates must be within ±{COORD_LIMIT}"))
+    }
+}
+
+fn check_size(w: i32, h: i32) -> Result<(), String> {
+    if w <= SIZE_LIMIT && h <= SIZE_LIMIT {
+        Ok(())
+    } else {
+        Err(format!("sizes must be at most {SIZE_LIMIT}"))
+    }
+}
+
 pub struct IpcServer {
     socket_path: PathBuf,
 }
@@ -251,6 +274,12 @@ fn cmd_camera(arg: Option<(f64, f64)>, state: &mut DriftWm) -> Reply {
             // animation's arrival test — the viewport would never settle again.
             if !x.is_finite() || !y.is_finite() {
                 return Err("camera coordinates must be finite numbers".to_string());
+            }
+            if !crate::state::valid_canvas_point(x, y) {
+                return Err(format!(
+                    "camera coordinates must be within ±{:e}",
+                    crate::state::CAMERA_LIMIT
+                ));
             }
             // Exit before deriving the target below: a fullscreen output
             // refuses camera moves, and the target is derived from the zoom,
@@ -584,11 +613,7 @@ fn cmd_bookmark(
             Ok(Response::Bookmark { x, y })
         }
         (Some(name), Some((x, y))) => {
-            if !x.is_finite() || !y.is_finite() {
-                return Err("bookmark coordinates must be finite".to_string());
-            }
-            state.bookmarks.insert(name, [x, y]);
-            state.session_store_mark_dirty();
+            state.set_bookmark(name, [x, y])?;
             Ok(Response::Bookmark { x, y })
         }
     }
@@ -617,6 +642,9 @@ fn element_by_selector(
 }
 
 fn cmd_move(window: Option<WindowSelector>, to: Option<(i32, i32)>, state: &mut DriftWm) -> Reply {
+    if let Some((x, y)) = to {
+        check_point(x, y)?;
+    }
     let window = match element_by_selector(state, window.as_ref())? {
         StageWindow::Client(window) => window,
         // No client to reconfigure: read or set the stand-in's canvas position
@@ -711,6 +739,7 @@ fn cmd_resize(
     if width <= 0 || height <= 0 {
         return Err("size must be positive".to_string());
     }
+    check_size(width, height)?;
     // A pinned window renders at its pin, a fullscreen one fills its output, and
     // one held back for a deferred adopt is about to be replaced — none of them
     // hold a canvas rect a resize could write.
@@ -1033,6 +1062,8 @@ pub(crate) fn resolve_screenshot_region(
             if w <= 0 || h <= 0 {
                 return Err("region width and height must be positive".to_string());
             }
+            check_point(x, y)?;
+            check_size(w, h)?;
             if from_screen {
                 // slurp coords live in the output *layout* space (`current_location()`,
                 // what wl_output/xdg-output advertise), NOT the output's position in the

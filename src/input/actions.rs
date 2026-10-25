@@ -425,8 +425,9 @@ impl DriftWm {
                 let (cam, zoom) = self.landing_view();
                 let x = cam.x + vc.x / zoom;
                 let y = -(cam.y + vc.y / zoom);
-                self.bookmarks.insert(name.clone(), [x, y]);
-                self.session_store_mark_dirty();
+                if let Err(e) = self.set_bookmark(name.clone(), [x, y]) {
+                    tracing::info!("set-bookmark '{name}': {e}");
+                }
             }
             Action::MoveToBookmark(name) => {
                 let Some(&[x, y]) = self.bookmarks.get(name) else {
