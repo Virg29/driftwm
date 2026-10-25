@@ -1144,9 +1144,14 @@ pub fn compose_frame(
                 shadow_elems += 1;
             }
         }
-        let client_blur_rects = with_states(&wl_surface, |s| {
-            crate::handlers::background_effect::get_cached_blur_region(s)
-        });
+        // Decomposed lazily on read, so only read with blur available to use it.
+        let client_blur_rects = blur_enabled
+            .then(|| {
+                with_states(&wl_surface, |s| {
+                    crate::handlers::background_effect::get_cached_blur_region(s)
+                })
+            })
+            .flatten();
         // Empty rect list = client explicitly opted out → treat as off.
         let client_blur = client_blur_rects.as_ref().is_some_and(|r| !r.is_empty());
         // A frozen exit still wears the fullscreen picture over a culled canvas,
