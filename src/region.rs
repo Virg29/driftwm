@@ -168,9 +168,11 @@ mod tests {
 
     #[test]
     fn a_region_of_more_rects_than_the_cap_becomes_its_bounding_box() {
-        let region = add((0..MAX_REGION_RECTS as i32 + 1).map(|i| rect(2 * i, 2 * i, 1, 1)));
-        let far = 2 * MAX_REGION_RECTS as i32 + 1;
-        assert_eq!(rects_of(&region), [rect(0, 0, far, far)]);
+        let hole = (RectangleKind::Subtract, rect(40, 40, 20, 20));
+        let mut rects = vec![(RectangleKind::Add, rect(0, 0, 100, 100))];
+        rects.extend(std::iter::repeat_n(hole, MAX_REGION_RECTS));
+        let region = RegionAttributes { rects };
+        assert_eq!(rects_of(&region), [rect(0, 0, 100, 100)]);
     }
 
     /// Few rects can still decompose into many: staggered columns split every

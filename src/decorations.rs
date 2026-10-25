@@ -618,9 +618,15 @@ mod tests {
     #[test]
     fn body_fill_for_a_stand_in_past_the_buffer_cap_stays_within_it() {
         let config = DecorationConfig::default();
+        let cap = MAX_BUFFER_EXTENT as usize;
+        let mut wide = render_body_fill(20_000, 100, 1, &config);
+        assert!(byte_len(&mut wide) <= cap * 100 * 4);
+        let mut tall = render_body_fill(100, 20_000, 1, &config);
+        assert!(byte_len(&mut tall) <= 100 * cap * 4);
+        // Sides that overflow i32 once scaled.
         for (w, h) in [(i32::MAX, 10), (10, i32::MAX)] {
             let mut fill = render_body_fill(w, h, 2, &config);
-            assert!(byte_len(&mut fill) <= MAX_BUFFER_EXTENT as usize * 20 * 4);
+            assert!(byte_len(&mut fill) <= cap * 20 * 4);
         }
     }
 

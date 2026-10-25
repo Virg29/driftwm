@@ -683,6 +683,10 @@ fn a_sandboxed_app_without_focus_cannot_activate() {
     f.client(sandboxed)
         .request_activation_token_with_serial(&target, serial.wrapping_add(1000));
     f.roundtrip(sandboxed);
+    assert!(
+        f.state().cursor.exec_cursor_deadline.is_none(),
+        "a refused token starts no launch cursor"
+    );
     f.client(sandboxed).activate(&target);
     f.double_roundtrip(sandboxed);
 
@@ -737,6 +741,31 @@ fn an_activation_token_expires() {
     f.double_roundtrip(id);
 
     assert_eq!(keyboard_focus(&mut f), Some(server_surface(&requester_win)));
+}
+
+/// An expired token is dropped, not just refused, so an app that never spends
+/// its tokens doesn't keep them.
+#[test]
+fn an_expired_activation_token_is_dropped_once_another_is_minted() {
+    use smithay::wayland::xdg_activation::XdgActivationToken;
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let requester = map_window(&mut f, id, "requester", (400, 300));
+    f.client(id).request_activation_token(&requester, true);
+    f.roundtrip(id);
+    age_last_token(&mut f, id, std::time::Duration::from_secs(11));
+    let aged = XdgActivationToken::from(f.client(id).state.activation_token.clone().unwrap());
+
+    f.client(id).request_activation_token(&requester, true);
+    f.roundtrip(id);
+
+    assert!(
+        f.state()
+            .xdg_activation_state
+            .data_for_token(&aged)
+            .is_none()
+    );
 }
 
 #[test]
