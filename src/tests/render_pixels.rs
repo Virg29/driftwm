@@ -448,3 +448,56 @@ fn live_frame_agrees_with_the_capture_at_fractional_output_scale() {
     f.state().render.remove_output(&output_name);
     gl::uninstall(&mut f);
 }
+
+/// A window can be any size a client asks for, and a live frame rasterizes its
+/// title bar at the output's scale: the frame must still render.
+#[test]
+#[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
+fn a_frame_renders_a_server_decorated_window_wider_than_any_buffer() {
+    let _gl = gl::lock();
+    let Some(renderer) = gl::surfaceless_renderer("huge window") else {
+        return;
+    };
+
+    let mut f = Fixture::with_config(super::config(
+        "[[window_rules]]\napp_id = \"huge\"\ndecoration = \"server\"\n",
+    ));
+    let output = f.add_output_scaled(1, (2560, 1600), 2.0);
+    gl::install(&mut f, renderer);
+
+    let client = f.add_client();
+    let window = f.client(client).create_window();
+    let surface = window.surface.clone();
+    window.set_app_id("huge");
+    window.commit();
+    f.roundtrip(client);
+    let window = f.client(client).window(&surface);
+    window.viewport.set_destination(30_000_000, 300);
+    window.attach_new_buffer();
+    window.ack_last_and_commit();
+    f.double_roundtrip(client);
+    super::tick_until_settled(&mut f);
+
+    let mut backend = f
+        .state()
+        .backend
+        .take()
+        .expect("the fixture has a renderer");
+    let bytes = {
+        let renderer = backend.renderer();
+        let elements = crate::render::compose_frame(f.state(), renderer, &output, Vec::new());
+        let refs: Vec<&crate::render::OutputRenderElements> = elements.iter().collect();
+        crate::render::render_elements_to_rgba(
+            renderer,
+            Size::<i32, Physical>::from((2560, 1600)),
+            Scale::from(2.0),
+            &refs,
+        )
+    };
+    f.state().backend = Some(backend);
+    assert!(bytes.is_ok(), "the frame rendered");
+
+    let output_name = output.name();
+    f.state().render.remove_output(&output_name);
+    gl::uninstall(&mut f);
+}

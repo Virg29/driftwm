@@ -1,8 +1,9 @@
 use insta::assert_snapshot;
 
 use driftwm::config::Config;
+use smithay::reexports::wayland_server::Resource as _;
 
-use super::{Fixture, adopt_last_configure, map_window, window_by_app_id};
+use super::{Fixture, adopt_last_configure, map_window, server_surface, window_by_app_id};
 
 /// One output, a plain toplevel. Captures the initial configure, then the
 /// post-map configure once a buffer is attached (window becomes Activated).
@@ -400,5 +401,36 @@ fn raise_parent_with_activated_child_is_quiet() {
         p_after.is_empty() && c_after.is_empty(),
         "re-raising a parent with an already-activated child must emit no configures, \
          got parent:\n{p_after}\nchild:\n{c_after}"
+    );
+}
+
+/// A client can size its surface without limit — a 1x1 buffer stretched by a
+/// viewport destination — and asking for a server-side title bar then has the
+/// compositor rasterize one as wide as the window on its first sized commit.
+#[test]
+fn a_server_decorated_window_wider_than_any_buffer_opens() {
+    let mut f = Fixture::with_config(super::config(
+        "[[window_rules]]\napp_id = \"huge\"\ndecoration = \"server\"\n",
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.set_app_id("huge");
+    window.commit();
+    f.roundtrip(id);
+
+    let window = f.client(id).window(&surface);
+    window.viewport.set_destination(30_000_000, 300);
+    window.attach_new_buffer();
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    let window = window_by_app_id(&mut f, "huge").unwrap();
+    assert_eq!(window.geometry().size.w, 30_000_000);
+    let key = crate::decorations::DecorationKey::Surface(server_surface(&window).id());
+    assert!(
+        f.state().decorations.contains_key(&key),
+        "the window got its title bar"
     );
 }
