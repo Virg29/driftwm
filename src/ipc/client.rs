@@ -3,8 +3,9 @@
 //! a compositor.
 
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::protocol::{
     Event, Reply, Request, Response, ScreenshotTarget, StateInfo, WindowSelector, socket_path,
@@ -298,11 +299,24 @@ pub enum ShotTarget {
 }
 
 pub fn run(msg: &Msg, json: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let request = to_request(msg)?;
+    let mut request = to_request(msg)?;
 
-    // `screenshot -o -`: the compositor writes a temp file (it can't stream over
-    // the JSON socket), which we then relay to stdout and delete.
-    let stdout_capture = matches!(msg, Msg::Screenshot { output: Some(o), .. } if o == "-");
+    // `screenshot -o -`: the compositor writes a file (it can't stream over the
+    // JSON socket), which we then relay to stdout. The file is one this client
+    // reserved, never a path read off the reply, and goes on every exit.
+    let stdout_capture = match (msg, &mut request) {
+        (
+            Msg::Screenshot {
+                output: Some(o), ..
+            },
+            Request::Screenshot { path, .. },
+        ) if o == "-" => {
+            let capture = StdoutCapture::reserve()?;
+            *path = capture.path.to_string_lossy().into_owned();
+            Some(capture)
+        }
+        _ => None,
+    };
 
     // A client launched inside a driftwm session inherits its WAYLAND_DISPLAY, so
     // the derived path targets that instance. DRIFTWM_SOCKET is an explicit
@@ -332,11 +346,11 @@ pub fn run(msg: &Msg, json: bool) -> Result<(), Box<dyn std::error::Error>> {
     let reply: Reply = serde_json::from_str(line.trim_end())?;
 
     // `-o -` claims stdout for the PNG bytes, so it takes precedence over --json.
-    // Clean up the temp file unconditionally, even if the read or write fails.
-    if stdout_capture && let Ok(Response::Screenshot { path, .. }) = &reply {
-        let bytes = std::fs::read(path);
-        let _ = std::fs::remove_file(path);
-        let bytes = bytes.map_err(|e| format!("cannot read capture {path}: {e}"))?;
+    if let Some(capture) = &stdout_capture
+        && let Ok(Response::Screenshot { .. }) = &reply
+    {
+        let bytes = std::fs::read(&capture.path)
+            .map_err(|e| format!("cannot read capture {}: {e}", capture.path.display()))?;
         std::io::stdout().write_all(&bytes)?;
         return Ok(());
     }
@@ -513,18 +527,14 @@ fn parse_region(tokens: &[String]) -> Result<(i32, i32, i32, i32), String> {
 }
 
 /// Resolve the output path the compositor will write to. It must be absolute —
-/// the compositor's working directory differs from the client's.
+/// the compositor's working directory differs from the client's. `run` swaps
+/// the path for `-` with a [`StdoutCapture`].
 fn resolve_output_path(output: &Option<String>) -> Result<String, String> {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let raw = match output.as_deref() {
-        // `-` → a temp file the client streams to stdout, then deletes.
-        Some("-") => std::env::temp_dir().join(format!(
-            "driftwm-screenshot-{}-{secs}.png",
-            std::process::id()
-        )),
         Some(p) => PathBuf::from(p),
         None => PathBuf::from(format!("driftwm-screenshot-{secs}.png")),
     };
@@ -536,6 +546,45 @@ fn resolve_output_path(output: &Option<String>) -> Result<String, String> {
             .join(raw)
     };
     Ok(abs.to_string_lossy().into_owned())
+}
+
+/// The file `screenshot -o -` has the compositor write before it is relayed to
+/// stdout: created new and private under `$XDG_RUNTIME_DIR/driftwm/`, so no
+/// other user can plant or read it, and removed when this drops.
+struct StdoutCapture {
+    path: PathBuf,
+}
+
+impl StdoutCapture {
+    fn reserve() -> Result<Self, String> {
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+            .filter(|dir| !dir.is_empty())
+            .ok_or("XDG_RUNTIME_DIR is not set, so there is nowhere private to capture to")?;
+        let dir = Path::new(&runtime).join("driftwm");
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+        Self::reserve_in(&dir).map_err(|e| format!("cannot reserve a capture file: {e}"))
+    }
+
+    fn reserve_in(dir: &Path) -> std::io::Result<Self> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = dir.join(format!("screenshot-{}-{nanos}.png", std::process::id()));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for StdoutCapture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 /// Read pushed `Event` lines until the server closes the connection, printing
@@ -659,7 +708,21 @@ fn print_state(info: &StateInfo) {
 #[cfg(test)]
 mod tests {
     use super::super::protocol::{Request, ScreenshotTarget, WindowSelector};
-    use super::{Msg, ShotTarget, parse_region, to_request};
+    use super::{Msg, ShotTarget, StdoutCapture, parse_region, to_request};
+
+    #[test]
+    fn a_stdout_capture_file_is_private_and_goes_with_its_guard() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("driftwm-capture-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let capture = StdoutCapture::reserve_in(&dir).unwrap();
+        let path = capture.path.clone();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "only this user can read it");
+        drop(capture);
+        assert!(!path.exists(), "the file goes with its guard");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     fn tokens(s: &str) -> Vec<String> {
         s.split_whitespace().map(String::from).collect()
