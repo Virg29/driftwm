@@ -100,9 +100,9 @@ impl DriftWm {
     }
 
     /// Resize the focused canvas element by walking its right or bottom edge:
-    /// `right` / `down` grow it out to the next stop, `left` / `up` pull it
-    /// back to the previous one, never past the usable area or over another
-    /// window.
+    /// `right` / `down` grow it out to the next stop, never past the usable
+    /// area or over another window; `left` / `up` pull it back to the previous
+    /// one, or by `resize_step` with none inside the window.
     pub(crate) fn resize_to_snap_focused(&mut self, dir: &Direction) {
         let Some((horizontal, grow)) = axis_of(dir) else {
             return;
@@ -142,7 +142,12 @@ impl DriftWm {
         let target = if grow {
             snap::next_grow_line(edge, edge.max(requested_edge), bound, &others, &q)
         } else {
-            snap::next_shrink_line(edge.min(requested_edge), anchor, bound, &others, &q)
+            let from = edge.min(requested_edge);
+            // A zero step isn't a reliable no-op: from a declined request it
+            // would ask for that request again.
+            let step = self.config.resize_step;
+            snap::next_shrink_line(from, anchor, bound, &others, &q)
+                .or_else(|| (step > 0).then_some(from - step as f64))
         };
         let Some(target) = target else {
             return;

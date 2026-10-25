@@ -348,7 +348,7 @@ px per nudge-window step (also move-to-snap's when there is no stop that way)
 
 Default: `20`
 
-px per grow-window / shrink-window step
+px per grow-window / shrink-window step (also resize-to-snap's shrink when no stop is inside)
 
 ### `pan_step`
 
@@ -755,7 +755,7 @@ Actions:
 - `move-to-snap <dir>` — move the focused window to the next snap stop that way, else by nudge_step px; never onto another window
 - `grow-window <dir>` — push the focused window's `<dir>` edge out by resize_step px
 - `shrink-window <dir>` — pull the focused window's `<dir>` edge in by resize_step px
-- `resize-to-snap <dir>` — right/down grow the right/bottom edge to the next snap stop, never over a window; left/up pull it back
+- `resize-to-snap <dir>` — right/down grow the right/bottom edge to the next snap stop, never over a window; left/up pull it back to the previous stop, else by resize_step px
 - `pan-viewport <dir>` — pan by pan_step px
 - `center-window` — park the focused window at focus_placement, zoom reset (a filled window returns to its fill view)
 - `focus-center` — focus the window under the pointer and park it; a pin is focused in place; with none there, center-window

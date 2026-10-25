@@ -12,8 +12,8 @@ use wayland_client::protocol::wl_surface::WlSurface as ClientSurface;
 use super::client::ClientId;
 use super::real::TempDir;
 use super::{
-    Fixture, TICK, ack_with_size, config, configure_count, give_ssd, last_configured, map_window,
-    settle, window_by_app_id, window_position,
+    Fixture, TICK, ack_but_keep_size, ack_with_size, config, configure_count, give_ssd,
+    last_configured, map_window, map_window_with_limits, settle, window_by_app_id, window_position,
 };
 use crate::state::StageWindow;
 use driftwm::config::{Action, Direction};
@@ -568,17 +568,111 @@ fn resize_to_snap_walks_the_right_edge_out_to_a_dock_and_back() {
         "back to the previous stop"
     );
 
-    let configures = configure_count(&mut f, id, &surface);
     act(&mut f, Action::ResizeToSnap(Direction::Left));
     assert_eq!(
-        configure_count(&mut f, id, &surface),
-        configures,
-        "no stop inside the window: a no-op"
+        last_configured(&mut f, id, &surface),
+        (580, 300),
+        "no stop inside the window: in by resize_step"
     );
+    assert_eq!(window_position(&mut f, &a), before);
     assert!(
         f.state().camera_target().is_none(),
         "a resize never moves the camera"
     );
+}
+
+/// With no stop inside, a shrink steps the right or bottom edge in by
+/// `resize_step`, the left and top edges holding, down to the client's
+/// minimum.
+#[test]
+fn resize_to_snap_shrinks_by_resize_step_with_no_stop_inside() {
+    let mut f = Fixture::with_config(config("[navigation]\nresize_step = 30\n"));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window_with_limits(&mut f, id, "a", (400, 300), (370, 270), (0, 0));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    f.state().map_window(
+        StageWindow::Client(a.clone()),
+        Point::from((100, 100)),
+        true,
+    );
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+
+    act(&mut f, Action::ResizeToSnap(Direction::Left));
+    assert_eq!(last_configured(&mut f, id, &surface), (370, 300));
+    ack_with_size(&mut f, id, &surface, (370, 300));
+    act(&mut f, Action::ResizeToSnap(Direction::Up));
+    assert_eq!(last_configured(&mut f, id, &surface), (370, 270));
+    ack_with_size(&mut f, id, &surface, (370, 270));
+    assert_eq!(window_position(&mut f, &a), Point::from((100, 100)));
+
+    let configures = configure_count(&mut f, id, &surface);
+    act(&mut f, Action::ResizeToSnap(Direction::Left));
+    act(&mut f, Action::ResizeToSnap(Direction::Up));
+    assert_eq!(
+        configure_count(&mut f, id, &surface),
+        configures,
+        "at the minimum: no configure"
+    );
+    assert_eq!(window_position(&mut f, &a), Point::from((100, 100)));
+}
+
+/// The step comes off the edge the walk starts from, not the one the client
+/// kept: a client that declined the last request would otherwise be asked to
+/// grow past it.
+#[test]
+fn resize_to_snap_shrinks_by_resize_step_from_an_outstanding_request() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let (a, surface) = window_at(&mut f, id, "a", (100, 100), (400, 300));
+    // Below `a`, offering its right edge at 300 as an alignment.
+    window_at(&mut f, id, "c", (100, 412), (200, 300));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+
+    act(&mut f, Action::ResizeToSnap(Direction::Left));
+    assert_eq!(last_configured(&mut f, id, &surface), (200, 300));
+    ack_but_keep_size(&mut f, id, &surface);
+
+    act(&mut f, Action::ResizeToSnap(Direction::Left));
+    assert_eq!(
+        last_configured(&mut f, id, &surface),
+        (180, 300),
+        "resize_step in from the 200 asked for, not from the 400 kept"
+    );
+}
+
+/// `resize_step = 0` is a no-op through `resize-to-snap` too, even with a
+/// request outstanding that a zero step would ask for again.
+#[test]
+fn a_zero_resize_step_leaves_resize_to_snap_with_no_stop_alone() {
+    let mut f = Fixture::with_config(config("[navigation]\nresize_step = 0\n"));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let (a, surface) = window_at(&mut f, id, "a", (100, 100), (400, 300));
+    // Below `a`, offering its right edge at 300 as an alignment.
+    window_at(&mut f, id, "c", (100, 412), (200, 300));
+    focus(&mut f, &a);
+    park_view(&mut f, Point::from((0.0, 0.0)));
+    act(&mut f, Action::ResizeToSnap(Direction::Left));
+    assert_eq!(
+        last_configured(&mut f, id, &surface),
+        (200, 300),
+        "precondition: the stop"
+    );
+    ack_but_keep_size(&mut f, id, &surface);
+
+    let configures = configure_count(&mut f, id, &surface);
+    act(&mut f, Action::ResizeToSnap(Direction::Left));
+    assert_eq!(configure_count(&mut f, id, &surface), configures);
+    assert_eq!(window_position(&mut f, &a), Point::from((100, 100)));
+
+    // The step is zero, not the action unreachable.
+    f.state().config.resize_step = 20;
+    act(&mut f, Action::ResizeToSnap(Direction::Left));
+    assert_eq!(last_configured(&mut f, id, &surface), (180, 300));
 }
 
 /// The fill edge: the usable area's edge, `snap.outer_gap` in.
@@ -876,10 +970,11 @@ fn resize_to_snap_leaves_a_window_outside_the_viewport_alone() {
     let configures = configure_count(&mut f, id, &surface);
 
     act(&mut f, Action::ResizeToSnap(Direction::Right));
+    act(&mut f, Action::ResizeToSnap(Direction::Left));
     assert_eq!(
         configure_count(&mut f, id, &surface),
         configures,
-        "off screen: no configure"
+        "off screen: no configure, a shrink included"
     );
 
     park_view(&mut f, Point::from((0.0, 0.0)));

@@ -173,7 +173,8 @@ pub struct Config {
     /// Pixels per nudge-window step, and per move-to-snap step
     /// (Mod+Shift+Arrow) with no stop that way.
     pub nudge_step: i32,
-    /// Pixels per grow-window / shrink-window step (no default binding).
+    /// Pixels per grow-window / shrink-window step (no default binding), and
+    /// per resize-to-snap shrink with no stop inside the window.
     pub resize_step: i32,
     /// Pixels per keyboard pan (Mod+Ctrl+Arrow).
     pub pan_step: f64,
