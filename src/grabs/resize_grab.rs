@@ -61,8 +61,8 @@ impl SizeConstraints {
     ///
     /// The floor bounds the *visible* stand-in — what it keeps usable, the bar
     /// and its close button, is chrome — so `chrome` deflates it into the body
-    /// space every other minimum lives in. The ceiling is the largest chrome
-    /// buffer, since the stand-in's body is rasterized at its size.
+    /// space every other minimum lives in. The ceiling reuses the chrome buffer
+    /// cap, in logical px: the stand-in's body is rasterized at its size.
     pub fn for_suspended(chrome: Chrome) -> Self {
         let cap = crate::decorations::MAX_BUFFER_EXTENT;
         Self {

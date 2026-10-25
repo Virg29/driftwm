@@ -180,6 +180,36 @@ fn quit_serialize_round_trip() {
     }
 }
 
+/// A stand-in can outgrow its cap after it was clamped (a snap past the
+/// clamp, a reload that thickened its chrome). Saved past the cap, the next
+/// boot would drop it, so the record is cut to the cap at its top-left.
+#[test]
+fn a_stand_in_past_the_cap_is_saved_at_the_cap() {
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+    let mut f = Fixture::with_config(config_restore(true));
+    f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(path.clone());
+    let cap = crate::decorations::MAX_BUFFER_EXTENT;
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((100, 100)),
+        Size::from((cap, cap)),
+        "s",
+        "S",
+    );
+    let chrome = f.state().suspended_chrome();
+
+    f.state().session_store_write_now();
+
+    let saved = session::read(&path);
+    assert_eq!(saved.entries[0].size, [cap, cap]);
+    let body = chrome.content_size(Size::from((cap, cap)));
+    let (x, y) = driftwm::canvas::content_to_rule(Point::from((100, 100)), body, chrome);
+    assert_eq!(saved.entries[0].position, [x, y]);
+    f.state().dismiss_suspended(sid);
+}
+
 /// A restored stand-in renders the same centered clickable name as a
 /// conversion-born one: its display name survives the round-trip, and the
 /// label cache tracks font-readiness so a label built before the startup font

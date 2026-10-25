@@ -664,8 +664,13 @@ impl DriftWm {
 /// A durable entry for a suspended window at canvas position `loc`, recorded as
 /// the visual frame it wears rather than the body it stores.
 fn suspended_entry(s: &SuspendedWindow, loc: Point<i32, Logical>, chrome: Chrome) -> SessionEntry {
-    let frame = chrome.frame_size(s.size.get());
-    let (x, y) = content_to_rule(loc, s.size.get(), chrome);
+    // A stand-in can outgrow its ceiling after the clamp (a snap past it, a
+    // reload that thickened the chrome), and restore drops an entry past it.
+    let max = crate::grabs::SizeConstraints::for_suspended(chrome).max;
+    let size = s.size.get();
+    let size = Size::from((size.w.min(max.w), size.h.min(max.h)));
+    let frame = chrome.frame_size(size);
+    let (x, y) = content_to_rule(loc, size, chrome);
     SessionEntry {
         id: s.id.0,
         app_id: s.identity.app_id.clone(),
