@@ -769,6 +769,19 @@ mod tests {
         assert_eq!(next_origin(288.0, false, 200.0, &others, &q), None);
     }
 
+    /// At zero gap the docks are flush, and a window it only touches doesn't
+    /// block one: the far dock past the furthest window ahead is always clear.
+    #[test]
+    fn a_move_at_zero_gap_docks_flush_against_a_window_it_touches() {
+        let others = [rect(200.0, 50.0, 200.0, 100.0)];
+        let q = StopQuery {
+            gap: 0.0,
+            ..query(true)
+        };
+        assert_eq!(next_origin(0.0, true, 200.0, &others, &q), Some(400.0));
+        assert_eq!(next_origin(400.0, false, 200.0, &others, &q), Some(0.0));
+    }
+
     #[test]
     fn a_stop_the_window_rounded_onto_does_not_count() {
         // A 12.5 gap puts the dock at 287.5, which the move rounds to 288;
