@@ -201,6 +201,12 @@ impl TabletSeatHandler for DriftWm {
         _tool: &smithay::backend::input::TabletToolDescriptor,
         image: CursorImageStatus,
     ) {
+        // The locked dispatch forwards no tablet event, so no tool can reach
+        // a lock surface: an image now comes from a client behind the lock,
+        // and the lock frame draws the cursor over the lock screen.
+        if self.session_lock.is_locked() {
+            return;
+        }
         self.cursor.cursor_status = image;
     }
 }
