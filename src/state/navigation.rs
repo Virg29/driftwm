@@ -40,8 +40,9 @@ const ACTIVATION_VISIBLE_THRESHOLD: f64 = 1.0;
 const ACTIVATION_ONSCREEN_THRESHOLD: f64 = f64::EPSILON;
 
 /// How far (screen px) a frame may sit past the usable edge, or the line a
-/// minimal pan holds it on, and still count as inside it. A pan that lands a frame flush on an edge carries float rounding
-/// through the camera anchor, and a hair's overhang must not read as clipped.
+/// minimal pan holds it on, and still count as inside it. A pan that lands a
+/// frame flush on an edge carries float rounding through the camera anchor,
+/// and a hair's overhang must not read as clipped.
 const IN_VIEW_NOISE: f64 = 1e-6;
 
 /// What a navigation does to the zoom it arrives at. The restore variant names
