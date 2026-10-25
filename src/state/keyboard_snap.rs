@@ -14,7 +14,7 @@ impl DriftWm {
     /// Move the focused canvas element along `dir` to the nearest stop past
     /// where it sits, and bring the camera along if that leaves the viewport.
     /// With no stop that way it nudges by `nudge_step` instead, the camera
-    /// panning just enough to keep it in view.
+    /// panning along the move just enough to show it that way.
     pub(crate) fn move_to_snap_focused(&mut self, dir: &Direction) {
         let Some((horizontal, forward)) = axis_of(dir) else {
             return;
@@ -69,26 +69,22 @@ impl DriftWm {
 
         // Judged where a flight still under way lands, not at its current
         // frame: a pan heading for the previous stop would leave this one.
-        // A nudge moves the window along one axis only, so the camera has no
-        // reason to move along the other.
         let (camera, zoom) = self.landing_view();
         let landed = super::fit::snap_rect_at(new_loc, size, bar, bw);
-        let axes = if stop.is_some() {
-            Axes::Both
-        } else {
-            Axes::Only { horizontal }
-        };
-        if self.frame_fully_in_view_at(&landed, camera, zoom, axes) {
+        if stop.is_some() {
+            if !self.frame_fully_in_view_at(&landed, camera, zoom, Axes::Both) {
+                self.navigate_to_element(&element, NavZoom::Keep);
+            }
             return;
         }
-        if stop.is_some() {
-            self.navigate_to_element(&element, NavZoom::Keep);
-        } else {
-            // As an edge pan carries a dragged window: it rides the usable
-            // edge while the canvas scrolls under it, where parking every
-            // step would throw the view around. Shown at the size just judged,
-            // which a client that declined a resize is still drawn at.
-            self.pan_minimally_to_element(&element, &landed, camera, zoom, axes);
+        // As an edge pan carries a dragged window: it rides the usable edge
+        // while the canvas scrolls under it, where parking every step would
+        // throw the view around, and the canvas scrolls only the way the
+        // window went. Shown at the size just judged, which a client that
+        // declined a resize is still drawn at.
+        let along = Axes::Only { horizontal };
+        if !self.frame_fully_in_view_at(&landed, camera, zoom, along) {
+            self.pan_minimally_to_element(&element, &landed, camera, zoom, along);
         }
     }
 
