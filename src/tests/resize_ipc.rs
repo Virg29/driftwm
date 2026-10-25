@@ -831,3 +831,35 @@ fn a_stand_in_read_reports_its_own_size() {
 
     f.state().dismiss_suspended(sid);
 }
+
+/// A stand-in's body is rasterized at its size, so its size is capped where
+/// the chrome buffers are: the visible frame stops at that cap.
+#[test]
+fn a_stand_in_resize_is_capped() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((400, 300)),
+        Size::from((400, 300)),
+        "s",
+        "S",
+    );
+    let element = stand_in_element(&mut f, sid);
+    let window_id = f.state().stage.id_of(&element).unwrap().0;
+
+    let cap = crate::decorations::MAX_BUFFER_EXTENT;
+    assert_eq!(
+        resize(
+            &mut f,
+            Some(WindowSelector::Id(window_id)),
+            Some((30_000, 30_000))
+        ),
+        Ok(Response::Size {
+            width: cap,
+            height: cap
+        })
+    );
+
+    f.state().dismiss_suspended(sid);
+}

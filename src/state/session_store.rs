@@ -714,15 +714,16 @@ fn body_entry_to_frame(mut entry: SessionEntry, chrome: Chrome) -> SessionEntry 
 }
 
 /// Whether a saved window's geometry is safe to feed the stage: size components
-/// in `1..=32767` (smithay's `Size::from` debug-asserts non-negative; the upper
-/// bound keeps render buffers sane) and positions within a range that can't
-/// overflow `rule_to_internal`'s `i32` math.
+/// in `1..=MAX_BUFFER_EXTENT` (smithay's `Size::from` debug-asserts
+/// non-negative; the upper bound is the largest stand-in) and positions within
+/// a range that can't overflow `rule_to_internal`'s `i32` math.
 fn valid_entry_geometry(entry: &SessionEntry) -> bool {
     const POSITION_LIMIT: i32 = 16_000_000;
+    let sizes = 1..=crate::decorations::MAX_BUFFER_EXTENT;
     let [w, h] = entry.size;
     let [x, y] = entry.position;
-    let ok = (1..=32767).contains(&w)
-        && (1..=32767).contains(&h)
+    let ok = sizes.contains(&w)
+        && sizes.contains(&h)
         && (-POSITION_LIMIT..=POSITION_LIMIT).contains(&x)
         && (-POSITION_LIMIT..=POSITION_LIMIT).contains(&y);
     if !ok {
@@ -780,6 +781,16 @@ mod tests {
         assert!(
             !valid_entry_geometry(&geom_entry([40000, 300], [0, 0])),
             "oversize"
+        );
+        let cap = crate::decorations::MAX_BUFFER_EXTENT;
+        assert!(valid_entry_geometry(&geom_entry([cap, cap], [0, 0])));
+        assert!(
+            !valid_entry_geometry(&geom_entry([cap + 1, 300], [0, 0])),
+            "wider than a stand-in can be"
+        );
+        assert!(
+            !valid_entry_geometry(&geom_entry([400, cap + 1], [0, 0])),
+            "taller than a stand-in can be"
         );
         assert!(
             !valid_entry_geometry(&geom_entry([400, 300], [20_000_000, 0])),
