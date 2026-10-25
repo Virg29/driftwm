@@ -10,7 +10,7 @@ pub use parse::{
     parse_gesture_trigger, parse_key_combo, parse_mouse_action, parse_mouse_binding,
     parse_tap_combo, parse_touch_config_entry, parse_touch_trigger,
 };
-pub use toml::config_path;
+pub use toml::{config_path, set_config_path};
 pub use types::*;
 
 use std::collections::{BTreeMap, HashMap, HashSet};

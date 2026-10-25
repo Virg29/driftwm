@@ -444,20 +444,37 @@ impl Default for XwaylandConfig {
     }
 }
 
+/// Set by `--config`, held in-process so children don't inherit it the way they
+/// would a `DRIFTWM_CONFIG` set on the process env.
+static CONFIG_PATH_OVERRIDE: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Point [`config_path`] at `path` for the rest of the process. Only the first
+/// call takes effect.
+pub fn set_config_path(path: &std::path::Path) {
+    let _ = CONFIG_PATH_OVERRIDE.set(expand_config_path(path.as_os_str().to_owned()));
+}
+
 pub fn config_path() -> std::path::PathBuf {
-    // --config <path> sets DRIFTWM_CONFIG at startup; read via var_os so a
-    // non-UTF-8 path still resolves instead of falling through to the default.
+    if let Some(path) = CONFIG_PATH_OVERRIDE.get() {
+        return path.clone();
+    }
     if let Some(p) = std::env::var_os("DRIFTWM_CONFIG") {
-        return match p.into_string() {
-            Ok(p) => std::path::PathBuf::from(expand_tilde(&p)),
-            Err(p) => std::path::PathBuf::from(p),
-        };
+        return expand_config_path(p);
     }
     let config_dir = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
         format!("{home}/.config")
     });
     std::path::PathBuf::from(config_dir).join("driftwm/config.toml")
+}
+
+/// `~/` expanded; a non-UTF-8 path is taken as is rather than falling through
+/// to the default.
+fn expand_config_path(path: std::ffi::OsString) -> std::path::PathBuf {
+    match path.into_string() {
+        Ok(p) => std::path::PathBuf::from(expand_tilde(&p)),
+        Err(p) => std::path::PathBuf::from(p),
+    }
 }
 
 pub fn expand_tilde(path: &str) -> String {

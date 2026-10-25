@@ -113,7 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --config <path>: override config file (useful for nested/test sessions).
     // Set before --check-config so validation targets the requested file.
     if let Some(path) = &cli.config {
-        unsafe { std::env::set_var("DRIFTWM_CONFIG", path) };
+        driftwm::config::set_config_path(path);
         let resolved = driftwm::config::config_path();
         // Only directories are rejected outright — `--config <(gen-config)` is
         // a pipe, and read_to_string is happy with it.
