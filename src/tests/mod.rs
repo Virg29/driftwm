@@ -10,6 +10,7 @@
 //! all clients and asserts `debug_counters` return to the construction-time
 //! baseline (opt out with `Fixture::skip_baseline_check`).
 
+mod capture_client;
 mod client;
 mod fixture;
 mod gl;
@@ -24,6 +25,7 @@ mod blur_pixels;
 mod bookmarks;
 mod camera_animation;
 mod camera_zoom_ipc;
+mod capture_pixels;
 mod cli_docs;
 mod client_teardown;
 mod config_reload;

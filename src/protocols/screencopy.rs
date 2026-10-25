@@ -318,7 +318,6 @@ macro_rules! delegate_screencopy {
 pub struct ScreencopyFrameInfo {
     output: Output,
     buffer_size: Size<i32, Physical>,
-    #[allow(dead_code)]
     region_loc: Point<i32, Physical>,
     overlay_cursor: bool,
 }
@@ -489,6 +488,12 @@ impl Screencopy {
 
     pub fn output(&self) -> &Output {
         &self.info.output
+    }
+
+    /// The captured region's top-left in the output's transformed physical
+    /// space, where its elements are composed; `(0, 0)` for a whole output.
+    pub fn region_loc(&self) -> Point<i32, Physical> {
+        self.info.region_loc
     }
 
     pub fn overlay_cursor(&self) -> bool {

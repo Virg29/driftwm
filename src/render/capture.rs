@@ -1,4 +1,6 @@
 use smithay::backend::allocator::Fourcc;
+use smithay::backend::renderer::element::RenderElement;
+use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::output::Output;
 use smithay::reexports::wayland_server::Resource;
@@ -108,19 +110,21 @@ pub fn render_screencopy(
     for screencopy in pending {
         let size = screencopy.buffer_size();
         let paint_cursors = screencopy.overlay_cursor();
-        let use_elements: Vec<&OutputRenderElements> = if paint_cursors {
-            elements.iter().collect()
-        } else {
-            elements
-                .iter()
-                .filter(|e| {
-                    !matches!(
+        // A region's top-left becomes the buffer's origin. `region_loc` is in the
+        // transformed space the elements are composed in, and the damage tracker
+        // below maps that space onto the untransformed buffer.
+        let offset = screencopy.region_loc().upscale(-1);
+        let use_elements: Vec<_> = elements
+            .iter()
+            .filter(|e| {
+                paint_cursors
+                    || !matches!(
                         e,
                         OutputRenderElements::Cursor(_) | OutputRenderElements::CursorSurface(_)
                     )
-                })
-                .collect()
-        };
+            })
+            .map(|e| RelocateRenderElement::from_element(e, offset, Relocate::Relative))
+            .collect();
 
         // Use persistent state for full-output captures (screen recording);
         // one-shot for region captures (partial screenshots).
@@ -283,14 +287,14 @@ fn clear_color_for(format: Fourcc, opaque: bool) -> [f32; 4] {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_to_offscreen(
+fn render_to_offscreen<E: RenderElement<GlesRenderer>>(
     renderer: &mut GlesRenderer,
     size: smithay::utils::Size<i32, Physical>,
     scale: Scale<f64>,
     transform: Transform,
     format: Fourcc,
     opaque_clear: bool,
-    elements: &[&OutputRenderElements],
+    elements: &[E],
     capture_state: Option<&mut crate::state::CaptureOutputState>,
 ) -> Result<smithay::backend::renderer::gles::GlesMapping, Box<dyn std::error::Error>> {
     use smithay::backend::renderer::damage::OutputDamageTracker;
@@ -380,14 +384,14 @@ pub(crate) fn render_elements_to_rgba(
 ///
 /// When `capture_state` is provided, reuses the damage tracker for incremental rendering.
 #[allow(clippy::too_many_arguments)]
-fn render_to_dmabuf(
+fn render_to_dmabuf<E: RenderElement<GlesRenderer>>(
     renderer: &mut GlesRenderer,
     dmabuf: &mut smithay::backend::allocator::dmabuf::Dmabuf,
     size: Size<i32, Physical>,
     scale: Scale<f64>,
     transform: Transform,
     opaque_clear: bool,
-    elements: &[&OutputRenderElements],
+    elements: &[E],
     capture_state: Option<&mut crate::state::CaptureOutputState>,
 ) -> Result<smithay::backend::renderer::sync::SyncPoint, Box<dyn std::error::Error>> {
     use smithay::backend::allocator::Buffer;
