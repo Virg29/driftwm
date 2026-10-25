@@ -1222,7 +1222,6 @@ fn create_surface(
             // Retry with Modifier::Invalid (implicit) only, which is the most
             // compatible option (lets the driver pick the layout).
             tracing::warn!("DrmCompositor failed ({e:?}), retrying with implicit modifier");
-            let _ = std::fs::write("/tmp/driftwm-drm-error.txt", format!("{e:?}"));
 
             let fallback_surface = match drm.create_surface(crtc, mode, &[connector.handle()]) {
                 Ok(s) => s,
@@ -1251,10 +1250,6 @@ fn create_surface(
                 Ok(c) => c,
                 Err(e2) => {
                     tracing::error!("DrmCompositor failed even with implicit modifier: {e2:?}");
-                    let _ = std::fs::write(
-                        "/tmp/driftwm-drm-error.txt",
-                        format!("First: {e:?}\nFallback: {e2:?}"),
-                    );
                     return None;
                 }
             }
