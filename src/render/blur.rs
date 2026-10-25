@@ -622,12 +622,15 @@ fn backdrop_wrap_mode(renderer: &mut GlesRenderer) -> i32 {
     use smithay::backend::renderer::gles::ffi;
     renderer
         .with_context(|gl| unsafe {
-            let gles3 = std::ffi::CStr::from_ptr(gl.GetString(ffi::VERSION) as *const _)
-                .to_string_lossy()
-                .strip_prefix("OpenGL ES ")
-                .and_then(|s| s.chars().next())
-                .and_then(|c| c.to_digit(10))
-                .is_some_and(|major| major >= 3);
+            // GetString answers null on a GL error; read that as no GLES 3.
+            let version = gl.GetString(ffi::VERSION);
+            let gles3 = !version.is_null()
+                && std::ffi::CStr::from_ptr(version as *const _)
+                    .to_string_lossy()
+                    .strip_prefix("OpenGL ES ")
+                    .and_then(|s| s.chars().next())
+                    .and_then(|c| c.to_digit(10))
+                    .is_some_and(|major| major >= 3);
             if gles3 {
                 ffi::MIRRORED_REPEAT
             } else {
