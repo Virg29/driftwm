@@ -353,6 +353,11 @@ pub fn raise_nofile_limit() {
 /// We also block SIGINT/SIGTERM/SIGHUP via pthread_sigmask for our own
 /// shutdown handling, and that mask is inherited too — clear it so apps
 /// with their own signal handlers still see those signals normally.
+///
+/// Every fd past stdio goes close-on-exec: libraries open some without it (the
+/// GPU render node among them), and a child has no use for any. The child also
+/// leaves the compositor's session, so a VT driftwm was started from is not its
+/// controlling terminal.
 pub(crate) fn prepare_child() -> std::io::Result<()> {
     // SAFETY: async-signal-safe, and SIG_DFL is always a valid disposition.
     unsafe { libc::signal(libc::SIGCHLD, libc::SIG_DFL) };
@@ -366,6 +371,20 @@ pub(crate) fn prepare_child() -> std::io::Result<()> {
         // SAFETY: setrlimit only reads the struct it is handed.
         unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &rlim) };
     }
+    // Raw syscall: libc's wrapper needs glibc 2.34. A kernel before 5.11
+    // refuses the call, leaving those fds as they were rather than failing the
+    // spawn. SAFETY: only changes fd flags.
+    unsafe {
+        libc::syscall(
+            libc::SYS_close_range,
+            3 as libc::c_uint,
+            libc::c_uint::MAX,
+            libc::CLOSE_RANGE_CLOEXEC,
+        )
+    };
+    // SAFETY: async-signal-safe; a forked child is never a group leader, so
+    // this can't fail.
+    unsafe { libc::setsid() };
     Ok(())
 }
 

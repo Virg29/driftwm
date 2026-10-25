@@ -1,5 +1,6 @@
 //! What a child spawned through `spawn_command` gets from the compositor: the
-//! open-file limit driftwm started with, not the one it raised for itself.
+//! open-file limit driftwm started with, not the one it raised for itself, no
+//! fd driftwm left open, and a session of its own.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -63,4 +64,31 @@ fn a_child_gets_the_open_file_limit_driftwm_started_with() {
         started.to_string(),
         "the child starts at the original soft limit"
     );
+}
+
+#[test]
+fn a_child_inherits_no_fd_the_compositor_left_open() {
+    let file = std::fs::File::open("/dev/null").unwrap();
+    // A dup drops CLOEXEC, like an fd a library opened without it.
+    // SAFETY: duplicating a valid open fd.
+    let leaky = unsafe { libc::dup(std::os::fd::AsRawFd::as_raw_fd(&file)) };
+    assert!(leaky > 2);
+
+    let fds = output_of("ls /proc/$$/fd");
+    // SAFETY: closing the fd dup'd above, which nothing else owns.
+    unsafe { libc::close(leaky) };
+    assert!(
+        !fds.lines().any(|fd| fd.trim() == leaky.to_string()),
+        "fd {leaky} reached the child: {fds:?}"
+    );
+}
+
+#[test]
+fn a_child_leads_its_own_session() {
+    let stat = output_of("cat /proc/$$/stat");
+    // `pid (comm) state ppid pgrp session ...`; comm may hold spaces.
+    let pid = stat.split_whitespace().next().unwrap();
+    let after_comm = &stat[stat.rfind(')').unwrap() + 1..];
+    let session = after_comm.split_whitespace().nth(3).unwrap();
+    assert_eq!(session, pid, "the shell is its own session leader");
 }
