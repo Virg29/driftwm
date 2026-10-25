@@ -258,8 +258,7 @@ fn push_plain_elements(
 }
 
 /// `bbox` grown to everything a window's chrome paints around it: the SSD bar
-/// `bar` tall above it, the border, and the shadow beyond that. A window is
-/// culled when this misses the view.
+/// `bar` tall above it, the border, and the shadow beyond that.
 fn chrome_cull_box(
     mut bbox: Rectangle<i32, Logical>,
     bar: i32,

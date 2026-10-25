@@ -788,7 +788,6 @@ pub fn render_toplevel_captures(state: &mut crate::state::DriftWm, renderer: &mu
     }
 }
 
-/// Why a capture couldn't be written into a client's shm buffer.
 #[derive(Debug)]
 enum ShmCopyError {
     /// The buffer is not what the capture advertised.
@@ -799,8 +798,7 @@ enum ShmCopyError {
 
 /// Copy a tightly packed `size` capture, four bytes per texel, into a client's
 /// shm `buffer`. smithay hands over the whole pool, so each row goes to the
-/// buffer's own `offset + row * stride`. The buffer must be `size`, in one of
-/// `formats`, with rows at least a texel row apart.
+/// buffer's own `offset + row * stride`.
 fn copy_to_shm(
     buffer: &WlBuffer,
     size: Size<i32, Physical>,

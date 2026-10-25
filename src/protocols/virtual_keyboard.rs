@@ -167,7 +167,6 @@ impl VirtualKeyboardBindings {
             return;
         };
         let file = File::from(fd);
-        // Read on the event loop: only from an fd that can't block it.
         if !super::is_regular_file(&file) {
             tracing::warn!("virtual keyboard: keymap is not in a regular file or memfd");
             return;

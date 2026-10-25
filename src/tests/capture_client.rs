@@ -162,7 +162,6 @@ impl Client {
         (session, record)
     }
 
-    /// Capture one frame of `session` into `buffer`.
     pub fn ext_capture(
         &mut self,
         session: &ExtImageCopyCaptureSessionV1,

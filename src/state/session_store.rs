@@ -749,7 +749,6 @@ pub(crate) fn valid_camera_seed(camera: Point<f64, Logical>, zoom: f64) -> bool 
         && (driftwm::canvas::MIN_ZOOM_FLOOR..=driftwm::canvas::MAX_ZOOM).contains(&zoom)
 }
 
-/// Finite and within [`CAMERA_LIMIT`] on both axes.
 pub(crate) fn valid_canvas_point(x: f64, y: f64) -> bool {
     x.is_finite() && y.is_finite() && x.abs() <= CAMERA_LIMIT && y.abs() <= CAMERA_LIMIT
 }
@@ -759,9 +758,8 @@ pub(crate) const MAX_BOOKMARKS: usize = 256;
 /// Longest bookmark name, in bytes.
 pub(crate) const MAX_BOOKMARK_NAME: usize = 256;
 
-/// Why bookmark `name` at `[x, y]` can't be held, if it can't: the bounds on
-/// a bookmark set over IPC, by `set-bookmark`, or read back from a session.
-/// Config seeds are the user's own and stand outside them.
+/// Why bookmark `name` at `[x, y]` can't be held, if it can't. Config seeds
+/// are the user's own and stand outside these bounds.
 fn bookmark_problem(name: &str, [x, y]: [f64; 2]) -> Option<String> {
     if name.len() > MAX_BOOKMARK_NAME {
         return Some(format!(

@@ -67,8 +67,7 @@ pub fn setup(state: &mut DriftWm) {
         .stdout(Stdio::null());
     // stderr inherits so satellite startup messages surface alongside our log.
 
-    // Satellite wait()s on its own Xwayland, which needs SIGCHLD back at
-    // SIG_DFL. SAFETY: `prepare_child` makes only async-signal-safe calls.
+    // SAFETY: `prepare_child` makes only async-signal-safe calls.
     unsafe {
         process.pre_exec(crate::state::prepare_child);
     }

@@ -303,7 +303,7 @@ pub fn run(msg: &Msg, json: bool) -> Result<(), Box<dyn std::error::Error>> {
 
     // `screenshot -o -`: the compositor writes a file (it can't stream over the
     // JSON socket), which we then relay to stdout. The file is one this client
-    // reserved, never a path read off the reply, and goes on every exit.
+    // reserved, never a path read off the reply.
     let stdout_capture = match (msg, &mut request) {
         (
             Msg::Screenshot {
