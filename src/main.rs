@@ -95,7 +95,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // process. Child threads inherit the mask; spawn_command clears it for
     // exec'd children.
     signals::block_early()?;
-    state::raise_nofile_limit();
 
     // Start Tracy server connection BEFORE other threads spawn so they're
     // captured. No-op without the profile-with-tracy feature.
@@ -109,6 +108,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .from_env_lossy(),
         )
         .init();
+
+    state::raise_nofile_limit();
 
     // --config <path>: override config file (useful for nested/test sessions).
     // Set before --check-config so validation targets the requested file.
