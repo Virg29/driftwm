@@ -37,9 +37,10 @@ const MAX_CONNECTIONS: usize = 64;
 /// a slow command (a large screenshot) doesn't eat into it.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// Bounds on canvas coordinates and sizes in a request: what session restore
-/// accepts, and what the `i32` canvas math holds once chrome and centering are
-/// added.
+/// Bounds on canvas coordinates and sizes in a request, so the `i32` canvas
+/// math holds once chrome and centering are added. `COORD_LIMIT` mirrors the
+/// position bound session restore accepts; `SIZE_LIMIT` is a looser outer gate
+/// than the stand-in size cap, which clamps a suspended window afterward.
 const COORD_LIMIT: i32 = 16_000_000;
 const SIZE_LIMIT: i32 = 32767;
 
