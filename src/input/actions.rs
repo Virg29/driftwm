@@ -232,7 +232,7 @@ impl DriftWm {
                 if let Some(element) = self.focused_element().filter(|e| self.is_canvas_window(e))
                     && let Some(loc) = self.stage.position_of(&element)
                 {
-                    let step = self.config.nudge_step;
+                    let step = self.canvas_step(&element, self.config.nudge_step);
                     let (ux, uy) = dir.to_unit_vec();
                     let offset = (
                         (ux * step as f64).round() as i32,

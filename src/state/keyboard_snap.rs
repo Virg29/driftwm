@@ -9,6 +9,7 @@ use smithay::utils::{Logical, Point};
 use super::{DriftWm, MinimalPan, NavZoom, StageWindow};
 use driftwm::config::Direction;
 use driftwm::layout::snap::{self, SnapRect, StopQuery};
+use driftwm::stage::StageElement;
 
 impl DriftWm {
     /// Move the focused canvas element along `dir` to the nearest stop past
@@ -54,7 +55,7 @@ impl DriftWm {
             // the one reaching furthest that way would offer a clear far dock.
             // So the nudge can't land on a window either.
             None => {
-                let step = self.config.nudge_step;
+                let step = self.canvas_step(&element, self.config.nudge_step);
                 if step == 0 {
                     return;
                 }
@@ -107,6 +108,37 @@ impl DriftWm {
         self.session_store_mark_dirty();
     }
 
+    /// The canvas px a configured `step` of screen px covers for `element`,
+    /// at the zoom the view showing it lands at, as a drag feels at that zoom.
+    /// The active output's view when it lands showing the element, since that
+    /// is the view move-to-snap scrolls; else `output_for_window`'s. Whole px,
+    /// and never rounded down to nothing.
+    pub(crate) fn canvas_step(&self, element: &StageWindow, step: i32) -> i32 {
+        if step == 0 {
+            return 0;
+        }
+        let center = self.stage.position_of(element).map(|loc| {
+            let size = element.size();
+            Point::from((
+                loc.x.saturating_add(size.w / 2),
+                loc.y.saturating_add(size.h / 2),
+            ))
+        });
+        let active = self.active_output().filter(|output| {
+            let (camera, zoom) = self.landing_view_on(output);
+            let view = driftwm::canvas::visible_canvas_rect(
+                camera.to_i32_round(),
+                super::output_logical_size(output),
+                zoom,
+            );
+            center.is_some_and(|c| view.contains(c))
+        });
+        let zoom = active
+            .or_else(|| self.output_for_window(element))
+            .map_or(1.0, |output| self.landing_view_on(&output).1);
+        ((f64::from(step) / zoom).round() as i32).max(1)
+    }
+
     /// Resize the focused canvas element by walking its right or bottom edge:
     /// `right` / `down` grow it out to the next stop, never past the usable
     /// area or over another window; `left` / `up` pull it back to the previous
@@ -153,7 +185,7 @@ impl DriftWm {
             let from = edge.min(requested_edge);
             // A zero step isn't a reliable no-op: from a declined request it
             // would ask for that request again.
-            let step = self.config.resize_step;
+            let step = self.canvas_step(&element, self.config.resize_step);
             snap::next_shrink_line(from, anchor, bound, &others, &q)
                 .or_else(|| (step > 0).then_some(from - step as f64))
         };

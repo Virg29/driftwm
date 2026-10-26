@@ -130,28 +130,28 @@ fn right_edges_on_screen(f: &mut Fixture, window: &Window) -> (f64, f64) {
 
 /// A nudge out of view pans the way an edge pan does: just far enough to show
 /// the window whole again, so it rides the usable edge, `outer_gap` in, while
-/// the canvas scrolls under it at the zoom it was at.
+/// the canvas scrolls under it at the zoom it was at, by the step on screen.
 #[test]
 fn move_to_snap_nudging_out_of_view_pans_just_enough() {
     let mut f = Fixture::with_config(config("[navigation]\nnudge_step = 35\n"));
     f.add_output(1, (1920, 1080));
     let id = f.add_client();
     // At zoom 0.5 the view spans 3840 canvas px: the right edge at 3806 sits
-    // 22 px short of where it rides, at 3828.
+    // 22 px short of where it rides, at 3828, and a 35 px step covers 70.
     let (a, _) = window_at(&mut f, id, "a", (3406, 100), (400, 300));
     focus(&mut f, &a);
     park_view(&mut f, Point::from((0.0, 0.0)));
     f.state().with_output_state(|os| os.zoom = 0.5);
 
     act(&mut f, Action::MoveToSnap(Direction::Right));
-    assert_eq!(window_position(&mut f, &a), Point::from((3441, 100)));
+    assert_eq!(window_position(&mut f, &a), Point::from((3476, 100)));
     settle(&mut f);
     let (right, riding) = right_edges_on_screen(&mut f, &a);
     assert_eq!(right, riding, "outer_gap in, not centred");
-    assert_eq!(f.state().camera(), Point::from((13.0, 0.0)));
+    assert_eq!(f.state().camera(), Point::from((48.0, 0.0)));
     assert_eq!(f.state().zoom(), 0.5);
 
-    for camera_x in [48.0, 83.0] {
+    for camera_x in [118.0, 188.0] {
         act(&mut f, Action::MoveToSnap(Direction::Right));
         settle(&mut f);
         assert_eq!(
@@ -169,7 +169,7 @@ fn move_to_snap_nudging_out_of_view_pans_just_enough() {
     f.state().apply_camera_animation(TICK);
     act(&mut f, Action::MoveToSnap(Direction::Right));
     settle(&mut f);
-    assert_eq!(f.state().camera(), Point::from((153.0, 0.0)));
+    assert_eq!(f.state().camera(), Point::from((328.0, 0.0)));
     let (right, riding) = right_edges_on_screen(&mut f, &a);
     assert_eq!(right, riding);
     assert_eq!(f.state().zoom(), 0.5);
@@ -417,8 +417,9 @@ fn move_to_snap_nudging_a_window_too_big_both_ways_rides_its_right_edge_across_o
     park_view(&mut f, Point::from((0.0, 0.0)));
     f.state().with_output_state(|os| os.zoom = 0.5);
 
-    // The line lies 3828 canvas px in from the camera.
-    for camera_x in [207.0, 242.0, 277.0] {
+    // The line lies 3828 canvas px in from the camera, and a 35 px step
+    // covers 70.
+    for camera_x in [242.0, 312.0, 382.0] {
         act(&mut f, Action::MoveToSnap(Direction::Right));
         settle(&mut f);
         assert_eq!(f.state().camera(), Point::from((camera_x, 0.0)));
