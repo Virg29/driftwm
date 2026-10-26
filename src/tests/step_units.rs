@@ -103,21 +103,23 @@ fn nudge_window_moves_step_over_zoom_canvas_px() {
     }
 }
 
-/// The diagonal converts the step to canvas px first, then projects it: 40
-/// canvas px at zoom 0.5 is 28 per axis, not `round(20 * 0.7071) / 0.5`.
+/// The diagonal converts the step to canvas px first, then projects it: 5 px
+/// at zoom 0.5 is 10 canvas px, 7 per axis, where projecting first would
+/// round to 4 screen px, 8 canvas.
 #[test]
 fn nudge_window_diagonal_projects_the_canvas_step() {
-    let (mut f, _, a, _) = scene(NUDGE_20, 0.5);
+    let (mut f, _, a, _) = scene("[navigation]\nnudge_step = 5\n", 0.5);
     act(&mut f, Action::NudgeWindow(Direction::DownRight));
-    assert_eq!(moved_by(&mut f, &a, (100, 100)), (28, 28));
+    assert_eq!(moved_by(&mut f, &a, (100, 100)), (7, 7));
 }
 
-/// 40 screen px at zoom 2 is 20 canvas px, 14 per axis.
+/// 7 px at zoom 2 rounds to 4 canvas px, 3 per axis, where dividing the
+/// projected step by the zoom would give 2.
 #[test]
 fn nudge_window_diagonal_at_zoom_two_projects_the_canvas_step() {
-    let (mut f, _, a, _) = scene("[navigation]\nnudge_step = 40\n", 2.0);
+    let (mut f, _, a, _) = scene("[navigation]\nnudge_step = 7\n", 2.0);
     act(&mut f, Action::NudgeWindow(Direction::UpLeft));
-    assert_eq!(moved_by(&mut f, &a, (100, 100)), (-14, -14));
+    assert_eq!(moved_by(&mut f, &a, (100, 100)), (-3, -3));
 }
 
 /// The nudge fallback steps in screen px like `nudge-window`.
@@ -136,8 +138,8 @@ fn move_to_snap_without_a_stop_moves_step_over_zoom_canvas_px() {
     }
 }
 
-/// Both directions of a resize step convert alike: a shrink is not a grow of
-/// the converted step's negation.
+/// Both directions of a resize step convert alike: a shrink keeps its sign
+/// through the conversion rather than clamping up to a 1 px grow.
 #[test]
 fn grow_and_shrink_window_change_size_by_step_over_zoom() {
     for (zoom, step) in [(0.5, 40), (1.0, 20), (2.0, 10)] {
@@ -300,4 +302,34 @@ fn nudge_judges_the_active_output_where_its_pan_lands() {
     output_state(&second).camera_target = Some(Point::from((0.0, 0.0)));
     act(&mut f, Action::NudgeWindow(Direction::Right));
     assert_eq!(moved_by(&mut f, &a, (100, 100)), (40, 0));
+}
+
+/// The window is judged at the size its placement assumes, as move-to-snap
+/// frames it: asked to shrink from 2000 to 400 wide and not yet acked, its
+/// centre is at x 1200, which the active output shows, not at the committed
+/// 2000, which only the other one does.
+#[test]
+fn the_active_output_is_judged_at_the_size_the_placement_assumes() {
+    let mut f = Fixture::with_config(config(
+        "[navigation]\nnudge_step = 20\nresize_step = 1600\n",
+    ));
+    f.skip_baseline_check();
+    let first = f.add_output(1, (1920, 1080));
+    let second = f.add_output(2, (1920, 1080));
+    let id = f.add_client();
+    let (a, surface) = window_at(&mut f, id, (1000, 100), (2000, 300));
+    focus(&mut f, &a);
+    f.state().focused_output = Some(second.clone());
+    park_output(&first, (0.0, 0.0), 1.0);
+    park_output(&second, (0.0, 0.0), 1.0);
+    act(&mut f, Action::ShrinkWindow(Direction::Right));
+    assert_eq!(
+        last_configured(&mut f, id, &surface),
+        (400, 300),
+        "precondition: a shrink is outstanding"
+    );
+
+    park_output(&first, (0.0, 0.0), 0.5);
+    act(&mut f, Action::NudgeWindow(Direction::Right));
+    assert_eq!(moved_by(&mut f, &a, (1000, 100)), (20, 0));
 }

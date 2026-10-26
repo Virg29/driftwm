@@ -360,7 +360,7 @@ impl DriftWm {
         let Some((element, start)) = self.step_target() else {
             return;
         };
-        let step = step.signum() * self.canvas_step(&element, step.abs());
+        let step = self.canvas_step(&element, step);
         self.step_resize(&element, start, dir, step);
     }
 

@@ -9,7 +9,6 @@ use smithay::utils::{Logical, Point};
 use super::{DriftWm, MinimalPan, NavZoom, StageWindow};
 use driftwm::config::Direction;
 use driftwm::layout::snap::{self, SnapRect, StopQuery};
-use driftwm::stage::StageElement;
 
 impl DriftWm {
     /// Move the focused canvas element along `dir` to the nearest stop past
@@ -108,17 +107,17 @@ impl DriftWm {
         self.session_store_mark_dirty();
     }
 
-    /// The canvas px a configured `step` of screen px covers for `element`,
-    /// so a step looks the same at any zoom: whole px, never rounded down to
-    /// nothing. Measured at the zoom where the view showing it lands: the
-    /// active output's when it lands showing the element, since that is the
-    /// view move-to-snap scrolls, else `output_for_window`'s.
+    /// The canvas px a `step` of screen px covers for `element`, signed like
+    /// `step`, so a step looks the same at any zoom: whole px, never rounded
+    /// down to nothing. Measured at the zoom where the view showing it lands:
+    /// the active output's when it lands showing the element, since that is
+    /// the view move-to-snap scrolls, else `output_for_window`'s.
     pub(crate) fn canvas_step(&self, element: &StageWindow, step: i32) -> i32 {
         if step == 0 {
             return 0;
         }
         let center = self.stage.position_of(element).map(|loc| {
-            let size = element.size();
+            let size = self.placed_element_size(element);
             Point::from((
                 loc.x.saturating_add(size.w / 2),
                 loc.y.saturating_add(size.h / 2),
@@ -136,7 +135,7 @@ impl DriftWm {
         let zoom = active
             .or_else(|| self.output_for_window(element))
             .map_or(1.0, |output| self.landing_view_on(&output).1);
-        ((f64::from(step) / zoom).round() as i32).max(1)
+        step.signum() * ((f64::from(step.unsigned_abs()) / zoom).round() as i32).max(1)
     }
 
     /// Resize the focused canvas element by walking its right or bottom edge:
