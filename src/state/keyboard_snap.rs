@@ -109,10 +109,10 @@ impl DriftWm {
     }
 
     /// The canvas px a configured `step` of screen px covers for `element`,
-    /// at the zoom the view showing it lands at, as a drag feels at that zoom.
-    /// The active output's view when it lands showing the element, since that
-    /// is the view move-to-snap scrolls; else `output_for_window`'s. Whole px,
-    /// and never rounded down to nothing.
+    /// so a step looks the same at any zoom: whole px, never rounded down to
+    /// nothing. Measured at the zoom where the view showing it lands: the
+    /// active output's when it lands showing the element, since that is the
+    /// view move-to-snap scrolls, else `output_for_window`'s.
     pub(crate) fn canvas_step(&self, element: &StageWindow, step: i32) -> i32 {
         if step == 0 {
             return 0;
