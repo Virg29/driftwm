@@ -67,15 +67,9 @@ pub fn setup(state: &mut DriftWm) {
         .stdout(Stdio::null());
     // stderr inherits so satellite startup messages surface alongside our log.
 
+    // SAFETY: `prepare_child` makes only async-signal-safe calls.
     unsafe {
-        process.pre_exec(|| {
-            // Don't pass the compositor's blocked sigmask to satellite.
-            crate::signals::unblock_all()?;
-            // SIGCHLD inherits as SIG_IGN from driftwm — satellite needs
-            // SIG_DFL so it can wait() on its own children (Xwayland).
-            libc::signal(libc::SIGCHLD, libc::SIG_DFL);
-            Ok(())
-        });
+        process.pre_exec(crate::state::prepare_child);
     }
 
     let child = match process.spawn() {

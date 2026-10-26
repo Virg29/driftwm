@@ -1,4 +1,4 @@
-mod actions;
+pub(crate) mod actions;
 pub(crate) mod constraint;
 pub(crate) mod gestures;
 pub(crate) mod keyboard;

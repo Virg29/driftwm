@@ -1,7 +1,12 @@
 use smithay::backend::allocator::Fourcc;
+use smithay::backend::renderer::element::RenderElement;
+use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::output::Output;
 use smithay::reexports::wayland_server::Resource;
+use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
+use smithay::reexports::wayland_server::protocol::wl_shm;
+use smithay::reexports::wayland_protocols::ext::image_copy_capture::v1::server::ext_image_copy_capture_frame_v1::FailureReason;
 use smithay::utils::{Physical, Rectangle, Scale, Size, Transform};
 
 use super::OutputRenderElements;
@@ -61,8 +66,6 @@ pub fn render_screencopy(
 ) {
     use driftwm::protocols::screencopy::ScreencopyBuffer;
     use smithay::backend::renderer::{ExportMem, Renderer};
-    use smithay::wayland::shm;
-    use std::ptr;
 
     let timestamp = state.start_time.elapsed();
     let min_interval = capture_min_interval(state.config.backend.max_capture_fps);
@@ -108,19 +111,21 @@ pub fn render_screencopy(
     for screencopy in pending {
         let size = screencopy.buffer_size();
         let paint_cursors = screencopy.overlay_cursor();
-        let use_elements: Vec<&OutputRenderElements> = if paint_cursors {
-            elements.iter().collect()
-        } else {
-            elements
-                .iter()
-                .filter(|e| {
-                    !matches!(
+        // A region's top-left becomes the buffer's origin. `region_loc` is in the
+        // transformed space the elements are composed in, and the damage tracker
+        // below maps that space onto the untransformed buffer.
+        let offset = screencopy.region_loc().upscale(-1);
+        let use_elements: Vec<_> = elements
+            .iter()
+            .filter(|e| {
+                paint_cursors
+                    || !matches!(
                         e,
                         OutputRenderElements::Cursor(_) | OutputRenderElements::CursorSurface(_)
                     )
-                })
-                .collect()
-        };
+            })
+            .map(|e| RelocateRenderElement::from_element(e, offset, Relocate::Relative))
+            .collect();
 
         // Use persistent state for full-output captures (screen recording);
         // one-shot for region captures (partial screenshots).
@@ -204,39 +209,23 @@ pub fn render_screencopy(
                 );
                 match result {
                     Ok(mapping) => {
-                        let copy_ok =
-                            shm::with_buffer_contents_mut(wl_buffer, |shm_buf, shm_len, _data| {
-                                let bytes = match renderer.map_texture(&mapping) {
-                                    Ok(b) => b,
-                                    Err(e) => {
-                                        tracing::warn!("screencopy: map_texture failed: {e:?}");
-                                        return false;
-                                    }
-                                };
-                                let copy_len = shm_len.min(bytes.len());
-                                unsafe {
-                                    ptr::copy_nonoverlapping(
-                                        bytes.as_ptr(),
-                                        shm_buf.cast(),
-                                        copy_len,
-                                    );
-                                }
-                                true
+                        let copied = renderer
+                            .map_texture(&mapping)
+                            .map_err(|e| tracing::warn!("screencopy: map_texture failed: {e:?}"))
+                            .is_ok_and(|bytes| {
+                                copy_to_shm(wl_buffer, size, &[wl_shm::Format::Xrgb8888], bytes)
+                                    .is_ok()
                             });
-
-                        match copy_ok {
-                            Ok(true) => {
-                                stamp_capture_submit(
-                                    &mut state.render.capture_state,
-                                    &capture_key,
-                                    use_persistent,
-                                    timestamp,
-                                );
-                                screencopy.submit(false, timestamp);
-                            }
-                            _ => {
-                                tracing::warn!("screencopy: SHM buffer copy failed");
-                            }
+                        if copied {
+                            stamp_capture_submit(
+                                &mut state.render.capture_state,
+                                &capture_key,
+                                use_persistent,
+                                timestamp,
+                            );
+                            screencopy.submit(false, timestamp);
+                        } else {
+                            tracing::warn!("screencopy: SHM buffer copy failed");
                         }
                     }
                     Err(e) => {
@@ -283,14 +272,14 @@ fn clear_color_for(format: Fourcc, opaque: bool) -> [f32; 4] {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_to_offscreen(
+fn render_to_offscreen<E: RenderElement<GlesRenderer>>(
     renderer: &mut GlesRenderer,
     size: smithay::utils::Size<i32, Physical>,
     scale: Scale<f64>,
     transform: Transform,
     format: Fourcc,
     opaque_clear: bool,
-    elements: &[&OutputRenderElements],
+    elements: &[E],
     capture_state: Option<&mut crate::state::CaptureOutputState>,
 ) -> Result<smithay::backend::renderer::gles::GlesMapping, Box<dyn std::error::Error>> {
     use smithay::backend::renderer::damage::OutputDamageTracker;
@@ -380,14 +369,14 @@ pub(crate) fn render_elements_to_rgba(
 ///
 /// When `capture_state` is provided, reuses the damage tracker for incremental rendering.
 #[allow(clippy::too_many_arguments)]
-fn render_to_dmabuf(
+fn render_to_dmabuf<E: RenderElement<GlesRenderer>>(
     renderer: &mut GlesRenderer,
     dmabuf: &mut smithay::backend::allocator::dmabuf::Dmabuf,
     size: Size<i32, Physical>,
     scale: Scale<f64>,
     transform: Transform,
     opaque_clear: bool,
-    elements: &[&OutputRenderElements],
+    elements: &[E],
     capture_state: Option<&mut crate::state::CaptureOutputState>,
 ) -> Result<smithay::backend::renderer::sync::SyncPoint, Box<dyn std::error::Error>> {
     use smithay::backend::allocator::Buffer;
@@ -425,8 +414,6 @@ pub fn render_capture_frames(
     elements: &[OutputRenderElements],
 ) {
     use smithay::backend::renderer::{ExportMem, Renderer};
-    use smithay::wayland::shm;
-    use std::ptr;
 
     let timestamp = state.start_time.elapsed();
     let min_interval = capture_min_interval(state.config.backend.max_capture_fps);
@@ -466,8 +453,6 @@ pub fn render_capture_frames(
     let capture_key = format!("cap:{}", output.name());
     let opaque_clear = state.fullscreen_conceals_canvas(output);
 
-    let fail_reason = smithay::reexports::wayland_protocols::ext::image_copy_capture::v1::server::ext_image_copy_capture_frame_v1::FailureReason::Unknown;
-
     for capture in pending {
         let paint_cursors = capture.paint_cursors;
         let use_elements: Vec<&OutputRenderElements> = if paint_cursors {
@@ -496,7 +481,7 @@ pub fn render_capture_frames(
         }
 
         // Try DMA-BUF first, fall back to SHM
-        let ok = if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&capture.buffer) {
+        let outcome = if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&capture.buffer) {
             let mut dmabuf = dmabuf.clone();
             let cs = if use_persistent {
                 Some(get_capture_state(
@@ -521,17 +506,13 @@ pub fn render_capture_frames(
                 &use_elements,
                 cs,
             ) {
-                Ok(sync) => {
-                    if let Err(e) = renderer.wait(&sync) {
-                        tracing::warn!("capture: dmabuf sync wait failed: {e:?}");
-                        false
-                    } else {
-                        true
-                    }
-                }
+                Ok(sync) => renderer.wait(&sync).map_err(|e| {
+                    tracing::warn!("capture: dmabuf sync wait failed: {e:?}");
+                    FailureReason::Unknown
+                }),
                 Err(e) => {
                     tracing::warn!("capture: dmabuf render failed: {e:?}");
-                    false
+                    Err(FailureReason::Unknown)
                 }
             }
         } else {
@@ -559,31 +540,23 @@ pub fn render_capture_frames(
                 cs,
             );
             match result {
-                Ok(mapping) => {
-                    shm::with_buffer_contents_mut(&capture.buffer, |shm_buf, shm_len, _data| {
-                        let bytes = match renderer.map_texture(&mapping) {
-                            Ok(b) => b,
-                            Err(e) => {
-                                tracing::warn!("capture: map_texture failed: {e:?}");
-                                return false;
-                            }
-                        };
-                        let copy_len = shm_len.min(bytes.len());
-                        unsafe {
-                            ptr::copy_nonoverlapping(bytes.as_ptr(), shm_buf.cast(), copy_len);
-                        }
-                        true
-                    })
-                    .unwrap_or(false)
-                }
+                Ok(mapping) => match renderer.map_texture(&mapping) {
+                    Ok(bytes) => copy_capture_to_shm(&capture.buffer, capture.buffer_size, bytes),
+                    Err(e) => {
+                        tracing::warn!("capture: map_texture failed: {e:?}");
+                        Err(FailureReason::Unknown)
+                    }
+                },
                 Err(e) => {
                     tracing::warn!("capture: offscreen render failed: {e:?}");
-                    false
+                    Err(FailureReason::Unknown)
                 }
             }
         };
 
-        if ok {
+        if let Err(reason) = outcome {
+            capture.frame.failed(reason);
+        } else {
             let w = capture.buffer_size.w;
             let h = capture.buffer_size.h;
             capture.frame.transform(output_transform.into());
@@ -604,8 +577,6 @@ pub fn render_capture_frames(
                 let fd = fd.lock().unwrap();
                 state.image_copy_capture_state.frame_done(&fd.session);
             }
-        } else {
-            capture.frame.failed(fail_reason);
         }
     }
 }
@@ -628,8 +599,6 @@ pub fn render_toplevel_captures(state: &mut crate::state::DriftWm, renderer: &mu
     use smithay::backend::renderer::element::surface::render_elements_from_surface_tree;
     use smithay::backend::renderer::{ExportMem, Renderer};
     use smithay::utils::Point;
-    use smithay::wayland::shm;
-    use std::ptr;
 
     let timestamp = state.start_time.elapsed();
     let min_interval = capture_min_interval(state.config.backend.max_capture_fps);
@@ -655,7 +624,7 @@ pub fn render_toplevel_captures(state: &mut crate::state::DriftWm, renderer: &mu
     }
 
     let scale = Scale::from(1.0);
-    let fail_reason = smithay::reexports::wayland_protocols::ext::image_copy_capture::v1::server::ext_image_copy_capture_frame_v1::FailureReason::Unknown;
+    let fail_reason = FailureReason::Unknown;
 
     for capture in pending {
         let PendingCaptureKind::Toplevel(ref surface) = capture.kind else {
@@ -744,7 +713,7 @@ pub fn render_toplevel_captures(state: &mut crate::state::DriftWm, renderer: &mu
         ));
 
         // Try DMA-BUF first, fall back to SHM.
-        let ok = if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&capture.buffer) {
+        let outcome = if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&capture.buffer) {
             let mut dmabuf = dmabuf.clone();
             match render_to_dmabuf(
                 renderer,
@@ -758,16 +727,13 @@ pub fn render_toplevel_captures(state: &mut crate::state::DriftWm, renderer: &mu
                 &elems_refs,
                 cs,
             ) {
-                Ok(sync) => match renderer.wait(&sync) {
-                    Ok(()) => true,
-                    Err(e) => {
-                        tracing::warn!("toplevel capture: dmabuf sync wait failed: {e:?}");
-                        false
-                    }
-                },
+                Ok(sync) => renderer.wait(&sync).map_err(|e| {
+                    tracing::warn!("toplevel capture: dmabuf sync wait failed: {e:?}");
+                    FailureReason::Unknown
+                }),
                 Err(e) => {
                     tracing::warn!("toplevel capture: dmabuf render failed: {e:?}");
-                    false
+                    Err(FailureReason::Unknown)
                 }
             }
         } else {
@@ -781,31 +747,23 @@ pub fn render_toplevel_captures(state: &mut crate::state::DriftWm, renderer: &mu
                 &elems_refs,
                 cs,
             ) {
-                Ok(mapping) => {
-                    shm::with_buffer_contents_mut(&capture.buffer, |shm_buf, shm_len, _data| {
-                        let bytes = match renderer.map_texture(&mapping) {
-                            Ok(b) => b,
-                            Err(e) => {
-                                tracing::warn!("toplevel capture: map_texture failed: {e:?}");
-                                return false;
-                            }
-                        };
-                        let copy_len = shm_len.min(bytes.len());
-                        unsafe {
-                            ptr::copy_nonoverlapping(bytes.as_ptr(), shm_buf.cast(), copy_len);
-                        }
-                        true
-                    })
-                    .unwrap_or(false)
-                }
+                Ok(mapping) => match renderer.map_texture(&mapping) {
+                    Ok(bytes) => copy_capture_to_shm(&capture.buffer, capture.buffer_size, bytes),
+                    Err(e) => {
+                        tracing::warn!("toplevel capture: map_texture failed: {e:?}");
+                        Err(FailureReason::Unknown)
+                    }
+                },
                 Err(e) => {
                     tracing::warn!("toplevel capture: offscreen render failed: {e:?}");
-                    false
+                    Err(FailureReason::Unknown)
                 }
             }
         };
 
-        if ok {
+        if let Err(reason) = outcome {
+            capture.frame.failed(reason);
+        } else {
             let w = capture.buffer_size.w;
             let h = capture.buffer_size.h;
             capture.frame.transform(Transform::Normal.into());
@@ -826,10 +784,79 @@ pub fn render_toplevel_captures(state: &mut crate::state::DriftWm, renderer: &mu
                 let fd = fd.lock().unwrap();
                 state.image_copy_capture_state.frame_done(&fd.session);
             }
-        } else {
-            capture.frame.failed(fail_reason);
         }
     }
+}
+
+#[derive(Debug)]
+enum ShmCopyError {
+    /// The buffer is not what the capture advertised.
+    Constraints,
+    /// The pool couldn't be accessed, or is smaller than the buffer claims.
+    Access,
+}
+
+/// Copy a tightly packed `size` capture, four bytes per texel, into a client's
+/// shm `buffer`. smithay hands over the whole pool, so each row goes to the
+/// buffer's own `offset + row * stride`.
+fn copy_to_shm(
+    buffer: &WlBuffer,
+    size: Size<i32, Physical>,
+    formats: &[wl_shm::Format],
+    pixels: &[u8],
+) -> Result<(), ShmCopyError> {
+    use smithay::wayland::shm;
+
+    let row_len = size.w as usize * 4;
+    let rows = size.h as usize;
+    shm::with_buffer_contents_mut(buffer, |pool, pool_len, data| {
+        if !formats.contains(&data.format)
+            || data.width != size.w
+            || data.height != size.h
+            || (data.stride as usize) < row_len
+        {
+            return Err(ShmCopyError::Constraints);
+        }
+        let (offset, stride) = (data.offset as usize, data.stride as usize);
+        // smithay checks the buffer against its pool at creation, and pools
+        // only grow; checked again here because the writes below are raw.
+        let end = offset + stride * (rows - 1) + row_len;
+        if end > pool_len || pixels.len() < row_len * rows {
+            return Err(ShmCopyError::Access);
+        }
+        for row in 0..rows {
+            // SAFETY: the source row lies inside `pixels` and the destination
+            // row inside the pool, both checked just above.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    pixels.as_ptr().add(row * row_len),
+                    pool.add(offset + row * stride),
+                    row_len,
+                );
+            }
+        }
+        Ok(())
+    })
+    .map_err(|_| ShmCopyError::Access)?
+}
+
+/// [`copy_to_shm`] for an ext-image-copy-capture frame, into either format its
+/// sessions advertise, mapped to the reason the frame then fails with.
+fn copy_capture_to_shm(
+    buffer: &WlBuffer,
+    size: Size<i32, Physical>,
+    pixels: &[u8],
+) -> Result<(), FailureReason> {
+    copy_to_shm(
+        buffer,
+        size,
+        &[wl_shm::Format::Xrgb8888, wl_shm::Format::Argb8888],
+        pixels,
+    )
+    .map_err(|e| match e {
+        ShmCopyError::Constraints => FailureReason::BufferConstraints,
+        ShmCopyError::Access => FailureReason::Unknown,
+    })
 }
 
 #[cfg(test)]

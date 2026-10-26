@@ -55,6 +55,7 @@ pub use navigation::{NavZoom, RevealPan};
 pub use persistence::{read_all_per_output_state, remove_state_file};
 pub use render_cache::{BorderCacheEntry, RenderCache, ShadowCacheEntry};
 pub(crate) use resize::{owes_a_configured_size, resize_constraints};
+pub(crate) use session_store::{CAMERA_LIMIT, valid_canvas_point};
 pub use session_store::{CameraSeed, SessionStore};
 pub use stage_window::{StageWindow, SuspendedId, SuspendedWindow};
 pub use suspended::{
@@ -91,6 +92,7 @@ use smithay::{
     },
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::time::Instant;
 
@@ -315,13 +317,79 @@ pub(crate) fn log_err(context: &str, result: Result<impl Sized, impl std::fmt::D
     }
 }
 
-/// Spawn a shell command with SIGCHLD reset to default and sigmask cleared.
+/// The open-file limit driftwm started with, kept by [`raise_nofile_limit`]
+/// for children to get back; zero until then.
+static ORIGINAL_NOFILE_CUR: AtomicU64 = AtomicU64::new(0);
+static ORIGINAL_NOFILE_MAX: AtomicU64 = AtomicU64::new(0);
+
+/// Raise the soft open-file limit to the hard one. Every client, IPC
+/// connection and dmabuf holds fds, and the common soft default of 1024 runs
+/// out long before the hard limit does. Children get the original back in
+/// [`prepare_child`], since some still `select()` on fds below 1024.
+pub fn raise_nofile_limit() {
+    let mut rlim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit only writes the struct it is handed.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) } != 0 {
+        tracing::warn!("getrlimit(NOFILE): {}", std::io::Error::last_os_error());
+        return;
+    }
+    ORIGINAL_NOFILE_CUR.store(rlim.rlim_cur, Ordering::Relaxed);
+    ORIGINAL_NOFILE_MAX.store(rlim.rlim_max, Ordering::Relaxed);
+    rlim.rlim_cur = rlim.rlim_max;
+    // SAFETY: setrlimit only reads the struct it is handed.
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &rlim) } != 0 {
+        tracing::warn!("setrlimit(NOFILE): {}", std::io::Error::last_os_error());
+    }
+}
+
+/// Reset what a child must not inherit from the compositor. Runs in `pre_exec`,
+/// between fork and exec, so it sticks to plain syscalls.
+///
 /// The compositor sets SIG_IGN on SIGCHLD for zombie reaping, but children
 /// inherit this — breaking GLib's waitpid()-based subprocess management
 /// (swaync-client hangs because GSpawnSync gets ECHILD).
 /// We also block SIGINT/SIGTERM/SIGHUP via pthread_sigmask for our own
 /// shutdown handling, and that mask is inherited too — clear it so apps
 /// with their own signal handlers still see those signals normally.
+///
+/// Every fd past stdio goes close-on-exec: libraries open some without it (the
+/// GPU render node among them), and a child has no use for any. The child also
+/// leaves the compositor's session, so a VT driftwm was started from is not its
+/// controlling terminal.
+pub(crate) fn prepare_child() -> std::io::Result<()> {
+    // SAFETY: async-signal-safe, and SIG_DFL is always a valid disposition.
+    unsafe { libc::signal(libc::SIGCHLD, libc::SIG_DFL) };
+    crate::signals::unblock_all()?;
+    let cur = ORIGINAL_NOFILE_CUR.load(Ordering::Relaxed);
+    if cur != 0 {
+        let rlim = libc::rlimit {
+            rlim_cur: cur,
+            rlim_max: ORIGINAL_NOFILE_MAX.load(Ordering::Relaxed),
+        };
+        // SAFETY: setrlimit only reads the struct it is handed.
+        unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &rlim) };
+    }
+    // Raw syscall: libc's wrapper needs glibc 2.34. A kernel before 5.11
+    // refuses the call, leaving those fds as they were rather than failing the
+    // spawn. SAFETY: only changes fd flags.
+    unsafe {
+        libc::syscall(
+            libc::SYS_close_range,
+            3 as libc::c_uint,
+            libc::c_uint::MAX,
+            libc::CLOSE_RANGE_CLOEXEC,
+        )
+    };
+    // SAFETY: async-signal-safe; a forked child is never a group leader, so
+    // this can't fail.
+    unsafe { libc::setsid() };
+    Ok(())
+}
+
+/// Spawn a shell command, reset by [`prepare_child`].
 ///
 /// `env` is layered on top of inherited env (toolkit defaults + user `[env]` +
 /// XCURSOR_*); driftwm never mutates its own process env at runtime, so this
@@ -330,12 +398,9 @@ pub fn spawn_command(cmd: &str, env: &HashMap<String, String>) {
     use std::os::unix::process::CommandExt;
     let mut child = std::process::Command::new("sh");
     child.args(["-c", cmd]).envs(env);
+    // SAFETY: `prepare_child` makes only async-signal-safe calls.
     unsafe {
-        child.pre_exec(|| {
-            libc::signal(libc::SIGCHLD, libc::SIG_DFL);
-            crate::signals::unblock_all()?;
-            Ok(())
-        });
+        child.pre_exec(prepare_child);
     }
     log_err("spawn command", child.spawn());
 }

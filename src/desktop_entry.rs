@@ -57,6 +57,9 @@ const _: fn() = || {
     assert_send::<DesktopEntryCache>();
 };
 
+/// Far past any real entry, which runs to a few KiB with every translation.
+const MAX_ENTRY_BYTES: u64 = 1 << 20;
+
 #[derive(Debug)]
 struct CachedEntry {
     /// Filename stem — both the launch key and the exact-match resolution key.
@@ -110,6 +113,13 @@ impl DesktopEntryCache {
                 // A higher-precedence directory already owns this id — even a
                 // hidden or malformed copy shadows lower-precedence ones.
                 if !claimed.insert(stem.clone()) {
+                    continue;
+                }
+                // Read only what an entry can be: a FIFO would block the
+                // scan, and a device or giant file would swallow memory.
+                let readable = std::fs::metadata(&path)
+                    .is_ok_and(|m| m.is_file() && m.len() < MAX_ENTRY_BYTES);
+                if !readable {
                     continue;
                 }
                 let Ok(entry) = DesktopEntry::from_path(&path, None::<&[&str]>) else {
@@ -335,6 +345,7 @@ fn field_code(token: String) -> Option<String> {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::os::unix::ffi::OsStringExt;
 
     /// Self-cleaning unique temp directory. The bin-crate fixture has its own
     /// (`src/tests/real.rs`), unreachable from a lib-crate unit test, so this
@@ -509,6 +520,68 @@ mod tests {
 
         let cache = DesktopEntryCache::new(vec![dir]);
         assert!(cache.resolve("nonexistent").is_none());
+    }
+
+    #[test]
+    fn a_symlinked_entry_resolves() {
+        let tmp = TempDir::new();
+        let store = tmp.subdir("store");
+        let apps = tmp.subdir("apps");
+        write_entry(
+            &store,
+            "editor.desktop",
+            &desktop("Name=Editor\nExec=editor"),
+        );
+        std::os::unix::fs::symlink(store.join("editor.desktop"), apps.join("editor.desktop"))
+            .unwrap();
+
+        let cache = DesktopEntryCache::new(vec![apps]);
+        assert_eq!(cache.resolve("editor").unwrap().display_name, "Editor");
+    }
+
+    #[test]
+    fn an_entry_over_a_mebibyte_is_skipped() {
+        let tmp = TempDir::new();
+        let dir = tmp.subdir("apps");
+        let padding = "# padding\n".repeat(110_000);
+        write_entry(
+            &dir,
+            "huge.desktop",
+            &desktop(&format!("Name=Huge\nExec=huge\n{padding}")),
+        );
+        write_entry(&dir, "small.desktop", &desktop("Name=Small\nExec=small"));
+
+        let cache = DesktopEntryCache::new(vec![dir]);
+        assert!(cache.resolve("huge").is_none());
+        assert!(cache.resolve("small").is_some());
+    }
+
+    #[test]
+    fn a_fifo_named_like_an_entry_is_skipped_without_blocking_the_scan() {
+        let tmp = TempDir::new();
+        let home = tmp.subdir("home");
+        let system = tmp.subdir("system");
+        let fifo = std::ffi::CString::new(home.join("editor.desktop").into_os_string().into_vec())
+            .unwrap();
+        // SAFETY: a valid NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o644) }, 0);
+        write_entry(
+            &system,
+            "editor.desktop",
+            &desktop("Name=Editor\nExec=editor"),
+        );
+
+        // Opening a FIFO with no writer blocks, so a scan that tried would never
+        // come back.
+        let (done, scanned) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done.send(DesktopEntryCache::new(vec![home, system]));
+        });
+        let cache = scanned
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the scan finished");
+        // Like a malformed copy, it still shadows the lower directory's.
+        assert!(cache.resolve("editor").is_none());
     }
 
     #[test]

@@ -29,6 +29,28 @@ enum TiffColor {
     Rgba8,
 }
 
+/// Longest side of a pyramid level decoded whole: 1 GiB of RGBA at the limit,
+/// and past it an allocation that can abort the compositor before it draws.
+pub const MAX_WHOLE_LOD_DIM: u32 = 16384;
+
+/// The level of `lods` to decode whole: the finest at most `preferred` px per
+/// side, else the coarsest, which has to be within [`MAX_WHOLE_LOD_DIM`].
+pub fn whole_lod(lods: &[LodMetadata], preferred: u32) -> Result<usize, String> {
+    let longest = |meta: &LodMetadata| meta.image_dims.0.max(meta.image_dims.1);
+    if let Some(i) = lods.iter().position(|m| longest(m) <= preferred) {
+        return Ok(i);
+    }
+    let coarsest = lods.len().checked_sub(1).ok_or("TIFF has no LOD levels")?;
+    let (w, h) = lods[coarsest].image_dims;
+    if longest(&lods[coarsest]) > MAX_WHOLE_LOD_DIM {
+        return Err(format!(
+            "its coarsest level is {w}×{h}, past the {MAX_WHOLE_LOD_DIM} px a level is \
+             decoded whole at; rebuild it as a pyramid with smaller levels"
+        ));
+    }
+    Ok(coarsest)
+}
+
 pub struct TiffSource {
     path: PathBuf,
     decoder: Decoder<BufReader<File>>,
@@ -399,6 +421,37 @@ mod tests {
             .expect("non-TIFF must be rejected");
         assert!(err.contains("not a TIFF"), "got: {err}");
         let _ = std::fs::remove_file(&path);
+    }
+
+    fn lods(dims: &[(u32, u32)]) -> Vec<LodMetadata> {
+        dims.iter()
+            .map(|&image_dims| LodMetadata {
+                image_dims,
+                tile_dims: (256, 256),
+                color: TiffColor::Rgb8,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_finest_level_within_the_preference_is_decoded_whole() {
+        let pyramid = lods(&[(40000, 20000), (10000, 5000), (2500, 1250), (625, 312)]);
+        assert_eq!(whole_lod(&pyramid, 4096), Ok(2));
+    }
+
+    #[test]
+    fn a_shallow_pyramid_falls_back_to_its_coarsest_level() {
+        let shallow = lods(&[(16384, 9000), (8192, 4500)]);
+        assert_eq!(whole_lod(&shallow, 4096), Ok(1));
+    }
+
+    #[test]
+    fn a_coarsest_level_past_the_whole_decode_limit_is_an_error() {
+        let flat = lods(&[(60000, 30000), (30000, 15000)]);
+        let err = whole_lod(&flat, 4096).expect_err("too big to decode whole");
+        assert!(err.contains("30000×15000"), "got: {err}");
+        assert!(whole_lod(&lods(&[(16385, 100)]), 4096).is_err());
+        assert_eq!(whole_lod(&lods(&[(16384, 100)]), 4096), Ok(0));
     }
 
     #[test]

@@ -315,10 +315,13 @@ fn tiff_tile_bg(
     let (full_w, full_h) = lods.first()?.image_dims;
 
     // Finest LOD that fits one bounded texture; fall back to the coarsest.
-    let lod_idx = lods
-        .iter()
-        .position(|m| m.image_dims.0.max(m.image_dims.1) <= TIFF_LOD_CAP)
-        .unwrap_or(lods.len() - 1);
+    let lod_idx = match super::tile_chunks_tiff::whole_lod(&lods, TIFF_LOD_CAP) {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::warn!("capture background '{path}': {e}");
+            return None;
+        }
+    };
     let meta = lods[lod_idx];
     let tiles_across = meta.image_dims.0.div_ceil(meta.tile_dims.0);
     let tiles_down = meta.image_dims.1.div_ceil(meta.tile_dims.1);

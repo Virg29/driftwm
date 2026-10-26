@@ -10,6 +10,7 @@
 //! all clients and asserts `debug_counters` return to the construction-time
 //! baseline (opt out with `Fixture::skip_baseline_check`).
 
+mod capture_client;
 mod client;
 mod fixture;
 mod gl;
@@ -24,11 +25,13 @@ mod blur_pixels;
 mod bookmarks;
 mod camera_animation;
 mod camera_zoom_ipc;
+mod capture_pixels;
 mod cli_docs;
 mod client_teardown;
 mod config_reload;
 mod configure_sequences;
 mod cycle_windows;
+mod exec_detect;
 mod ext_workspace;
 mod fit_close;
 mod focus_center;
@@ -46,8 +49,10 @@ mod hotplug;
 mod hover_focus;
 mod input_dispatch;
 mod interact_min;
+mod ipc_bounds;
 mod ipc_cursor;
 mod ipc_focus;
+mod ipc_socket;
 mod layer_bindings;
 mod layer_destroy_focus;
 mod layer_frame_gating;
@@ -68,11 +73,13 @@ mod render_pixels;
 mod resize_actions;
 mod resize_ipc;
 mod resize_parity;
+mod screenshot_write;
 mod send_to_output;
 mod session_lock;
 mod session_restore;
 mod snap_actions;
 mod soak;
+mod spawn;
 mod stand_in_parity;
 mod suspend_flows;
 mod suspended;

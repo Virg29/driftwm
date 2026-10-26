@@ -304,3 +304,22 @@ fn reload_kde_default_mode_reaches_new_binds_not_existing() {
     assert_eq!(f.client(late).state.kde_default_modes, [KdeMode::Server]);
     assert_eq!(f.client(early).state.kde_default_modes, [KdeMode::Client]);
 }
+
+#[test]
+fn reload_keeps_the_displays_children_are_pointed_at() {
+    let mut f = Fixture::new();
+    // Set at startup outside the config, so the rebuilt child env lacks them.
+    let env = &mut f.state().config.child_env;
+    env.insert("WAYLAND_DISPLAY".into(), "wayland-7".into());
+    env.insert("DISPLAY".into(), ":3".into());
+
+    f.state()
+        .reload_config_from_contents("[navigation]\ndrift = 0.5\n");
+
+    let env = &f.state().config.child_env;
+    assert_eq!(
+        env.get("WAYLAND_DISPLAY").map(String::as_str),
+        Some("wayland-7")
+    );
+    assert_eq!(env.get("DISPLAY").map(String::as_str), Some(":3"));
+}

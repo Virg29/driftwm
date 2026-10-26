@@ -14,7 +14,7 @@ use smithay::backend::renderer::gles::{GlesRenderer, GlesTexProgram, GlesTexture
 use smithay::backend::renderer::{ImportMem, Texture};
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Size};
 
-use super::tile_chunks_tiff::TiffSource;
+use super::tile_chunks_tiff::{TiffSource, whole_lod};
 use super::tile_worker::{TileRequest, WorkerPool};
 use super::{PixelSnapRescaleElement, TileShaderElement};
 
@@ -150,14 +150,8 @@ impl BgChunkCache {
         // Pick fallback LOD: the FINEST (lowest-index) LOD whose dimensions
         // fit within `FALLBACK_MAX_DIM`. Deep pyramids would otherwise pin
         // the fallback to a too-blurry coarsest page.
-        let mut fallback_lod = (n_after_vips_trunc - 1) as u32;
-        for i in 0..n_after_vips_trunc {
-            let dims = source.lods()[i].image_dims;
-            if dims.0.max(dims.1) <= FALLBACK_MAX_DIM {
-                fallback_lod = i as u32;
-                break;
-            }
-        }
+        let fallback_lod =
+            whole_lod(&source.lods()[..n_after_vips_trunc], FALLBACK_MAX_DIM)? as u32;
         // LODs past the fallback are unused (per-tile loading stops at
         // `fallback_lod - 1`; pick_lod clamps to `fallback_lod`). Truncate so
         // `n_lods()` reports the actually-used count.

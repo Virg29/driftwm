@@ -145,28 +145,43 @@ pub fn read(path: &Path) -> SessionEnvelope {
     }
 }
 
-/// Atomically write the envelope: serialize to a sibling `.tmp`, then rename
-/// over the target. `fsync` flushes the file before the rename, at the cost of
-/// blocking the caller.
+/// Atomically write the envelope: serialize to a sibling temp file named for
+/// this process, so two instances sharing the path never write through each
+/// other's, then rename over the target. `fsync` flushes the file before the
+/// rename, at the cost of blocking the caller.
 pub fn write(path: &Path, envelope: &SessionEnvelope, fsync: bool) -> std::io::Result<()> {
-    use std::io::Write as _;
-
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let json = serde_json::to_string_pretty(envelope)?;
 
     let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
+    tmp.push(format!(".{}.tmp", std::process::id()));
+    write_private(Path::new(&tmp), path, json.as_bytes(), fsync)
+}
 
-    let mut file = std::fs::File::create(&tmp)?;
-    file.write_all(json.as_bytes())?;
+/// Write `bytes` to `tmp`, then rename it over `path`, so a reader only ever
+/// sees a whole file. The file is the owner's alone: `tmp` is created afresh,
+/// mode 0600, even where an older one was left behind.
+pub fn write_private(tmp: &Path, path: &Path, bytes: &[u8], fsync: bool) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    match std::fs::remove_file(tmp) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(tmp)?;
+    file.write_all(bytes)?;
     if fsync {
         file.sync_all()?;
     }
     drop(file);
-    std::fs::rename(&tmp, path)
+    std::fs::rename(tmp, path)
 }
 
 /// Split entries into those to materialize now and those to carry forward
@@ -268,6 +283,58 @@ mod tests {
         let read_back = read(&path);
         assert_eq!(read_back, envelope);
         assert_eq!(read_back.version, VERSION);
+    }
+
+    fn empty_envelope() -> SessionEnvelope {
+        SessionEnvelope {
+            version: VERSION,
+            saved_at: 0,
+            entries: vec![entry(1, Origin::Explicit)],
+            outputs: BTreeMap::new(),
+            bookmarks: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn the_session_file_is_readable_by_its_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new();
+        let path = tmp.path.join("session.json");
+        write(&path, &empty_envelope(), false).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn a_write_leaves_another_instances_temp_file_alone() {
+        let tmp = TempDir::new();
+        let path = tmp.path.join("session.json");
+        let other = tmp.path.join("session.json.tmp");
+        std::fs::write(&other, "another instance mid-write").unwrap();
+
+        write(&path, &empty_envelope(), false).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&other).unwrap(),
+            "another instance mid-write"
+        );
+        assert_eq!(read(&path), empty_envelope());
+    }
+
+    #[test]
+    fn a_private_write_tightens_a_stale_temp_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new();
+        let path = tmp.path.join("state");
+        let stale = tmp.path.join("state.tmp");
+        std::fs::write(&stale, "left by a crash").unwrap();
+        std::fs::set_permissions(&stale, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_private(&stale, &path, b"x=1\n", false).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "x=1\n");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]

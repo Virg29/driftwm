@@ -167,6 +167,10 @@ impl VirtualKeyboardBindings {
             return;
         };
         let file = File::from(fd);
+        if !super::is_regular_file(&file) {
+            tracing::warn!("virtual keyboard: keymap is not in a regular file or memfd");
+            return;
+        }
         let mut buf = vec![0u8; size];
         if file.read_exact_at(&mut buf, 0).is_err() {
             tracing::warn!("virtual keyboard: failed to read keymap fd");

@@ -542,7 +542,10 @@ fn bake_content(
             );
             bake_draw(&mut frame, &element, scale, phys_size);
         }
-        let _ = frame.finish();
+        if let Err(e) = frame.finish() {
+            tracing::debug!("close snapshot dropped: baking its content failed: {e:?}");
+            return None;
+        }
     }
     let buffer = TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None);
     Some((buffer, phys_size))
@@ -709,7 +712,10 @@ fn flatten(
         if let Some(ref element) = bar_element {
             bake_draw(&mut frame, element, scale, phys_size);
         }
-        let _ = frame.finish();
+        if let Err(e) = frame.finish() {
+            tracing::debug!("close snapshot dropped: flattening it failed: {e:?}");
+            return None;
+        }
     }
     let buffer = TextureBuffer::from_texture(renderer, texture, 1, Transform::Normal, None);
     Some((buffer, bounds, phys_size))

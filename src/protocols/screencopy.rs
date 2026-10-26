@@ -318,7 +318,6 @@ macro_rules! delegate_screencopy {
 pub struct ScreencopyFrameInfo {
     output: Output,
     buffer_size: Size<i32, Physical>,
-    #[allow(dead_code)]
     region_loc: Point<i32, Physical>,
     overlay_cursor: bool,
 }
@@ -392,12 +391,11 @@ where
             }
             ScreencopyBuffer::Dmabuf(dmabuf.clone())
         } else {
-            let valid = shm::with_buffer_contents(&buffer, |_, shm_len, buffer_data| {
+            let valid = shm::with_buffer_contents(&buffer, |_, _, buffer_data| {
                 buffer_data.format == Format::Xrgb8888
                     && buffer_data.width == size.w
                     && buffer_data.height == size.h
                     && buffer_data.stride == size.w * 4
-                    && shm_len == buffer_data.stride as usize * buffer_data.height as usize
             })
             .unwrap_or(false);
 
@@ -489,6 +487,12 @@ impl Screencopy {
 
     pub fn output(&self) -> &Output {
         &self.info.output
+    }
+
+    /// The captured region's top-left in the output's transformed physical
+    /// space, where its elements are composed; `(0, 0)` for a whole output.
+    pub fn region_loc(&self) -> Point<i32, Physical> {
+        self.info.region_loc
     }
 
     pub fn overlay_cursor(&self) -> bool {

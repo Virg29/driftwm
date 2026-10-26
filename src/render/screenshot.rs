@@ -127,11 +127,45 @@ pub fn capture_region_to_png(
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
-    img.save_with_format(path, image::ImageFormat::Png)
-        .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    write_png(&img, path).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
 
     Ok(Capture {
         width: total_w as u32,
         height: total_h as u32,
     })
+}
+
+/// Write `img` to a new file beside `path`, then rename it into place: a
+/// failure never truncates or half-writes what `path` held, and a symlink at
+/// `path` is replaced instead of written through.
+fn write_png(img: &RgbaImage, path: &Path) -> Result<(), String> {
+    use std::io::Write as _;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    let name = path.file_name().ok_or("the path names no file")?;
+    let mut tmp_name = std::ffi::OsString::from(".");
+    tmp_name.push(name);
+    tmp_name.push(format!(
+        ".{}-{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let tmp = path.with_file_name(tmp_name);
+
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .map_err(|e| e.to_string())?;
+    let mut writer = std::io::BufWriter::new(file);
+    let written = img
+        .write_to(&mut writer, image::ImageFormat::Png)
+        .map_err(|e| e.to_string())
+        .and_then(|()| writer.flush().map_err(|e| e.to_string()))
+        .and_then(|()| std::fs::rename(&tmp, path).map_err(|e| e.to_string()));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
 }

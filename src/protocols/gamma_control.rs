@@ -151,13 +151,16 @@ where
                 };
                 let output = output.clone();
 
-                // Synchronous read on the wayland thread is fine: wlr-gamma-control
-                // clients write the full LUT in a single syscall before sending
-                // set_gamma, so this completes immediately on the kernel-side pipe
-                // buffer.
+                // Read synchronously on the wayland thread, so only from an fd
+                // that can't block it: the protocol hands over a mappable table.
                 let mut gamma = vec![0u16; data.gamma_size as usize * 3];
                 let buf = bytemuck::cast_slice_mut(&mut gamma);
                 let mut file = File::from(fd);
+                if !super::is_regular_file(&file) {
+                    tracing::warn!("gamma data is not in a regular file or memfd");
+                    fail_control(state, resource, &output);
+                    return;
+                }
 
                 if let Err(err) = file.read_exact(buf) {
                     tracing::warn!("failed to read gamma data: {err:?}");
