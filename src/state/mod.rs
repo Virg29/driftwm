@@ -1498,8 +1498,9 @@ impl DriftWm {
     /// Debug-only end-of-tick check: the stage's own structural invariants
     /// hold; the two halves of the fullscreen split (stage membership and
     /// per-output viewport-return) cover the same outputs; and every SSD
-    /// decoration entry belongs to a live window on the stage. A panic here is
-    /// a routing bug — some mutation bypassed the stage wrappers.
+    /// decoration entry belongs to a live window on the stage or a stand-in
+    /// still fading out. A panic here is a routing bug — some mutation
+    /// bypassed the stage wrappers.
     #[cfg(debug_assertions)]
     pub fn verify_stage_invariants(&self) {
         self.stage.verify_invariants();
@@ -1546,10 +1547,14 @@ impl DriftWm {
                     .stage
                     .windows()
                     .any(|w| w.wl_surface().is_some_and(|s| s.id() == *id)),
-                crate::decorations::DecorationKey::Suspended(sid) => self
-                    .stage
-                    .windows()
-                    .any(|w| w.suspended().is_some_and(|s| s.id == *sid)),
+                // A departing stand-in's fade redraws its chrome off the
+                // stage; the tick purges it when the fade ends.
+                crate::decorations::DecorationKey::Suspended(sid) => {
+                    self.stage
+                        .windows()
+                        .any(|w| w.suspended().is_some_and(|s| s.id == *sid))
+                        || self.standin_fades.iter().any(|f| f.suspended.id == *sid)
+                }
             };
             assert!(present, "decoration entry for a window not on the stage");
         }

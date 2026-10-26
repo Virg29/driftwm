@@ -1205,6 +1205,108 @@ fn adoption_clears_the_launching_state_the_fade_captures() {
     );
 }
 
+/// Compose one live frame for `output`, the way the backends do before
+/// `post_render`.
+fn compose_one_frame(f: &mut Fixture, output: &smithay::output::Output) {
+    let mut backend = f
+        .state()
+        .backend
+        .take()
+        .expect("the fixture has a renderer");
+    crate::render::compose_frame(f.state(), backend.renderer(), output, Vec::new());
+    f.state().backend = Some(backend);
+}
+
+/// Tick until every stand-in fade has run out.
+fn tick_out_standin_fades(f: &mut Fixture) {
+    for _ in 0..super::MAX_TICKS {
+        if f.state().standin_fades.is_empty() {
+            return;
+        }
+        f.state().tick_window_animations(super::TICK);
+    }
+    panic!("stand-in fades did not finish");
+}
+
+/// A departing stand-in keeps drawing its chrome through its fade, after it
+/// has left the stage. A frame drawn mid-fade must still pass the per-frame
+/// stage check (every pump runs it), and the chrome must go with the fade.
+fn assert_fade_frame_keeps_stage_invariants(
+    f: &mut Fixture,
+    output: &smithay::output::Output,
+    sid: SuspendedId,
+) {
+    assert!(
+        !f.state().standin_fades.is_empty(),
+        "a stand-in fade is running"
+    );
+    compose_one_frame(f, output);
+    f.pump(1);
+
+    tick_out_standin_fades(f);
+    assert!(
+        !f.state()
+            .decorations
+            .contains_key(&crate::decorations::DecorationKey::Suspended(sid)),
+        "the fade's chrome went with it"
+    );
+}
+
+#[test]
+#[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
+fn a_frame_mid_adoption_crossfade_keeps_the_stage_invariants() {
+    let _gl = super::gl::lock();
+    let Some(renderer) = super::gl::surfaceless_renderer("adoption crossfade") else {
+        return;
+    };
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    super::gl::install(&mut f, renderer);
+
+    let (sid, cid, surface) = arrange_pending_relaunch(&mut f, &tmp);
+    let w = f.client(cid).window(&surface);
+    w.set_size(300, 200);
+    w.attach_new_buffer();
+    w.ack_last_and_commit();
+    f.double_roundtrip(cid);
+    assert!(
+        window_by_app_id(&mut f, "myapp").is_some(),
+        "the window adopted the slot"
+    );
+
+    assert_fade_frame_keeps_stage_invariants(&mut f, &output, sid);
+
+    f.state().render.remove_output(&output.name());
+    super::gl::uninstall(&mut f);
+}
+
+#[test]
+#[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
+fn a_frame_mid_dismiss_fade_keeps_the_stage_invariants() {
+    let _gl = super::gl::lock();
+    let Some(renderer) = super::gl::surfaceless_renderer("dismiss fade") else {
+        return;
+    };
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    super::gl::install(&mut f, renderer);
+
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((500, 500)),
+        Size::from((600, 400)),
+        "myapp",
+        "myapp",
+    );
+    f.state().dismiss_suspended(sid);
+
+    assert_fade_frame_keeps_stage_invariants(&mut f, &output, sid);
+
+    f.state().render.remove_output(&output.name());
+    super::gl::uninstall(&mut f);
+}
+
 /// A client that dies without a clean unmap (crash) leaves an animation entry
 /// keyed by a now-dead id; the sweep beside `retain_alive` in
 /// `refresh_and_flush_clients` drains it on the next pump, and the fixture
