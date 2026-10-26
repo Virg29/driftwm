@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use crate::surface_tree::focus_belongs_to_window;
 use driftwm::canvas::{
-    CanvasPos, ScreenPos, canvas_to_screen, closest_point_on_rect, minimal_reveal_camera,
-    screen_to_canvas,
+    CanvasPos, ScreenPos, canvas_to_screen, closest_point_on_rect, leading_edge_camera,
+    minimal_reveal_camera, screen_to_canvas,
 };
 use driftwm::layout::snap::SnapRect;
 use driftwm::window_ext::WindowExt;
@@ -19,7 +19,10 @@ use smithay::{
     wayland::seat::WaylandFocus,
 };
 
-use super::{DriftWm, PendingClickNavigate, PendingPick, PickTarget, StageWindow, output_state};
+use super::{
+    DriftWm, PendingClickNavigate, PendingPick, PickTarget, StageWindow, ZoomAnimationAnchor,
+    output_state,
+};
 
 /// Max pointer travel (screen px) between press and release for a click to
 /// still count as a click rather than a drag. Beyond it, no auto-navigate — a
@@ -36,9 +39,10 @@ const ACTIVATION_VISIBLE_THRESHOLD: f64 = 1.0;
 /// size-dependent cutoff. See `window_already_active`.
 const ACTIVATION_ONSCREEN_THRESHOLD: f64 = f64::EPSILON;
 
-/// How far (screen px) a frame may sit past the usable edge and still count as
-/// inside it. A pan that lands a frame flush on an edge carries float rounding
-/// through the camera anchor, and a hair's overhang must not read as clipped.
+/// How far (screen px) a frame may sit past the usable edge, or the line a
+/// minimal pan holds it on, and still count as inside it. A pan that lands a
+/// frame flush on an edge carries float rounding through the camera anchor,
+/// and a hair's overhang must not read as clipped.
 const IN_VIEW_NOISE: f64 = 1e-6;
 
 /// What a navigation does to the zoom it arrives at. The restore variant names
@@ -96,6 +100,17 @@ pub enum RevealPan {
     Minimal,
 }
 
+/// What a minimal pan keeps in view, `outer_gap` in from the usable edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MinimalPan {
+    /// The whole frame, centred on an axis it is too big for.
+    Whole,
+    /// The edge leading a move, along x if `horizontal` and toward higher
+    /// coordinates if `forward`, held on the line; the camera's course on the
+    /// other axis is left as it was.
+    LeadingEdge { horizontal: bool, forward: bool },
+}
+
 impl DriftWm {
     /// Navigate the active output's viewport to a window: raise, focus, animate
     /// the camera until the window sits on the `focus_placement` point (the
@@ -135,18 +150,62 @@ impl DriftWm {
         }
         match pan {
             RevealPan::Park(nav_zoom) => self.navigate_to_element(element, nav_zoom),
-            RevealPan::Minimal => self.pan_minimally_to_element(element, camera, zoom),
+            RevealPan::Minimal => {
+                if let Some(frame) = self.reveal_frame(element) {
+                    self.pan_minimally_to_element(element, &frame, camera, zoom, MinimalPan::Whole);
+                }
+            }
+        }
+    }
+
+    /// Whether the active output's camera at `camera` and `zoom` has to move
+    /// for `pan` to keep `element`'s `frame` in view.
+    pub(super) fn minimal_pan_moves(
+        &self,
+        element: &StageWindow,
+        frame: &SnapRect,
+        camera: Point<f64, Logical>,
+        zoom: f64,
+        pan: MinimalPan,
+    ) -> bool {
+        let target = self.minimal_pan_camera(element, frame, camera, zoom, pan);
+        (target.x - camera.x).abs().max((target.y - camera.y).abs()) * zoom > IN_VIEW_NOISE
+    }
+
+    /// Where the active output's camera goes from `camera` at `zoom` when it
+    /// pans the least that keeps `element`'s `frame` in view as `pan` says.
+    fn minimal_pan_camera(
+        &self,
+        element: &StageWindow,
+        frame: &SnapRect,
+        camera: Point<f64, Logical>,
+        zoom: f64,
+        pan: MinimalPan,
+    ) -> Point<f64, Logical> {
+        // A border wider than `outer_gap` puts the inset past the usable edge,
+        // which would leave the revealed frame clipped.
+        let border = self.element_chrome(element).border;
+        let inset = self.config.outer_frame_inset(border).max(0.0);
+        let usable = self.get_usable_area();
+        match pan {
+            MinimalPan::Whole => minimal_reveal_camera(frame, camera, zoom, usable, inset),
+            MinimalPan::LeadingEdge {
+                horizontal,
+                forward,
+            } => leading_edge_camera(frame, camera, zoom, usable, inset, horizontal, forward),
         }
     }
 
     /// Focus + raise `element` and pan the active output's view from `camera`
-    /// at `zoom` by the least amount that shows the element's frame whole,
-    /// `outer_gap` in from the usable edge.
-    fn pan_minimally_to_element(
+    /// at `zoom`, where any flight under way lands, by the least amount that
+    /// keeps the element's `frame` in view as `pan` says.
+    pub(super) fn pan_minimally_to_element(
         &mut self,
         element: &StageWindow,
+        frame: &SnapRect,
         camera: Point<f64, Logical>,
         zoom: f64,
+        pan: MinimalPan,
     ) {
         // As in `navigate_to_window_on`: nothing is drawn for it yet.
         if self.hidden_by_deferred_adopt(element) {
@@ -160,25 +219,54 @@ impl DriftWm {
         // As in `navigate_to_window_on`.
         self.hover_follows_camera = false;
 
-        let Some(frame) = self.reveal_frame(element) else {
-            return;
-        };
-        // A border wider than `outer_gap` puts the inset past the usable edge,
-        // which would leave the revealed frame clipped.
-        let border = self.element_chrome(element).border;
-        let inset = self.config.outer_frame_inset(border).max(0.0);
-        let target =
-            minimal_reveal_camera(&frame, camera, zoom, self.usable_area_on(&output), inset);
+        let target = self.minimal_pan_camera(element, frame, camera, zoom, pan);
 
         // Through the anchor, not a bare `camera_target`: an anchor still armed
         // by the previous pan would steer the camera back every tick.
-        let center = Point::from((
-            (frame.x_low + frame.x_high) / 2.0,
-            (frame.y_low + frame.y_high) / 2.0,
-        ));
-        let center_screen =
-            Point::from(((center.x - target.x) * zoom, (center.y - target.y) * zoom));
-        self.set_camera_anchor(&output, center, center_screen, zoom);
+        let (anchor, anchor_screen) = match pan {
+            MinimalPan::Whole => {
+                let center = Point::from((
+                    (frame.x_low + frame.x_high) / 2.0,
+                    (frame.y_low + frame.y_high) / 2.0,
+                ));
+                let center_screen =
+                    Point::from(((center.x - target.x) * zoom, (center.y - target.y) * zoom));
+                (center, center_screen)
+            }
+            MinimalPan::LeadingEdge {
+                horizontal,
+                forward,
+            } => {
+                // Steering by a point far off screen would swing the camera
+                // there with whatever zoom is left to fly, so the move steers
+                // by its leading edge, which lands on screen however big the
+                // frame, and the held axis keeps the anchor of any flight
+                // under way, and so its course. Every zoom flight arms an
+                // anchor, so with none the zoom holds and the camera's own
+                // origin serves.
+                let held =
+                    output_state(&output)
+                        .zoom_animation_anchor
+                        .unwrap_or(ZoomAnimationAnchor {
+                            canvas: camera,
+                            screen: Point::from((0.0, 0.0)),
+                        });
+                if horizontal {
+                    let edge = if forward { frame.x_high } else { frame.x_low };
+                    (
+                        Point::from((edge, held.canvas.y)),
+                        Point::from(((edge - target.x) * zoom, held.screen.y)),
+                    )
+                } else {
+                    let edge = if forward { frame.y_high } else { frame.y_low };
+                    (
+                        Point::from((held.canvas.x, edge)),
+                        Point::from((held.screen.x, (edge - target.y) * zoom)),
+                    )
+                }
+            }
+        };
+        self.set_camera_anchor(&output, anchor, anchor_screen, zoom);
     }
 
     /// The frame a minimal reveal brings into view: sized as configured, not
@@ -429,8 +517,12 @@ impl DriftWm {
         {
             return;
         }
+        let element = StageWindow::Client(window.clone());
+        let Some(frame) = self.reveal_frame(&element) else {
+            return;
+        };
         let (camera, zoom) = self.landing_view();
-        self.pan_minimally_to_element(&StageWindow::Client(window.clone()), camera, zoom);
+        self.pan_minimally_to_element(&element, &frame, camera, zoom, MinimalPan::Whole);
     }
 
     /// Cancel any armed or deferred click-navigate. Clearing the deferred timer

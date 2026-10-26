@@ -170,9 +170,11 @@ pub struct Config {
     pub touch_speed: f64,
     /// Scroll momentum on a 0–1 scale: 0 = off, 0.5 = default, 1 = floatiest.
     pub drift: f64,
-    /// Pixels per keyboard nudge (Mod+Shift+Arrow).
+    /// Pixels per nudge-window step, and per move-to-snap step
+    /// (Mod+Shift+Arrow) with no stop that way.
     pub nudge_step: i32,
-    /// Pixels per grow-window / shrink-window step (no default binding).
+    /// Pixels per grow-window / shrink-window step (no default binding), and
+    /// per resize-to-snap shrink with no stop inside the window.
     pub resize_step: i32,
     /// Pixels per keyboard pan (Mod+Ctrl+Arrow).
     pub pan_step: f64,
