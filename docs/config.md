@@ -354,7 +354,7 @@ screen px per grow-window / shrink-window step, scaled by zoom like nudge_step (
 
 Default: `100.0`
 
-px per pan-viewport step
+screen px per pan-viewport step
 
 ### `anchors`
 
@@ -758,7 +758,7 @@ Actions:
 - `grow-window <dir>` — push the focused window's `<dir>` edge out by resize_step screen px
 - `shrink-window <dir>` — pull the focused window's `<dir>` edge in by resize_step screen px
 - `resize-to-snap <dir>` — right/down grow the right/bottom edge to the next snap stop, never over a window; left/up pull it back to the previous stop, else by resize_step screen px
-- `pan-viewport <dir>` — pan by pan_step px
+- `pan-viewport <dir>` — pan by pan_step screen px
 - `center-window` — park the focused window at focus_placement, zoom reset (a filled window returns to its fill view)
 - `focus-center` — focus the window under the pointer and park it; a pin is focused in place; with none there, center-window
 - `center-nearest <dir>` — park the nearest window that way at focus_placement
@@ -880,7 +880,7 @@ Directions: up, down, left, right, up-left, up-right, down-left, down-right
 "mod+shift+f10" = "set-trackpad off"   # turn it off whatever the current state
 ```
 
-**Example: grow and shrink the right edge by resize_step px (unbound by default)**
+**Example: grow and shrink the right edge by resize_step screen px (unbound by default)**
 
 ```toml
 "mod+ctrl+alt+right" = "grow-window right"
@@ -896,7 +896,7 @@ Directions: up, down, left, right, up-left, up-right, down-left, down-right
 "mod+ctrl+shift+right" = "resize-to-snap right"
 ```
 
-**Example: nudge-window by nudge_step px (unbound by default)**
+**Example: nudge-window by nudge_step screen px (unbound by default)**
 
 ```toml
 "mod+alt+shift+right" = "nudge-window right"
