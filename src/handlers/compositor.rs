@@ -21,8 +21,8 @@ use smithay::{
         buffer::BufferHandler,
         compositor::{
             BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
-            RectangleKind, SurfaceAttributes, add_blocker, add_pre_commit_hook, get_parent,
-            is_sync_subsurface, with_states,
+            RectangleKind, SurfaceAttributes, TraversalAction, add_blocker, add_pre_commit_hook,
+            get_parent, is_sync_subsurface, with_states, with_surface_tree_upward,
         },
         dmabuf::get_dmabuf,
         seat::WaylandFocus,
@@ -30,6 +30,14 @@ use smithay::{
         shm::{ShmHandler, ShmState},
     },
 };
+
+/// Most rects a surface's opaque region may hold before it is dropped. smithay
+/// rebuilds the region from scratch on every new buffer, folding each rect
+/// against the growing set of pieces, at a cost that climbs far faster than the
+/// rect count — measured in release, ~13 ms worst case at this cap but ~5.6 s at
+/// 256. Deliberately lower than the blur region cap: that walks a cheaper
+/// in-house decomposition, this one smithay's per-rect subtraction.
+const MAX_OPAQUE_REGION_RECTS: usize = 64;
 
 impl CompositorHandler for DriftWm {
     fn compositor_state(&mut self) -> &mut CompositorState {
@@ -270,6 +278,33 @@ impl CompositorHandler for DriftWm {
                     }
                 }
             });
+        }
+
+        // The buffer handler below rebuilds every surface in this tree, sync
+        // subsurfaces included, so the whole tree is checked rather than just
+        // the committed surface. An opaque region only lets the renderer skip
+        // what it covers; dropping one costs culling, never correctness. Gated
+        // on the same sync-subsurface bail the handler uses, so the two walk
+        // the identical set: a sync subsurface is rebuilt only on its parent's
+        // commit, whose walk already reaches it.
+        if !is_sync_subsurface(surface) {
+            with_surface_tree_upward(
+                surface,
+                (),
+                |_, _, _| TraversalAction::DoChildren(()),
+                |_, states, _| {
+                    let mut guard = states.cached_state.get::<SurfaceAttributes>();
+                    let attrs = guard.current();
+                    if attrs
+                        .opaque_region
+                        .as_ref()
+                        .is_some_and(|region| region.rects.len() > MAX_OPAQUE_REGION_RECTS)
+                    {
+                        attrs.opaque_region = None;
+                    }
+                },
+                |_, _, _| true,
+            );
         }
 
         // Without this, bbox_from_surface_tree returns 0x0.
