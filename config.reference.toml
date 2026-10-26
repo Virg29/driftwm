@@ -150,12 +150,12 @@
                               # it's off screen (false = focus only a visible one)
 # auto_navigate_on_click = false  # a click on a partly off-screen window scrolls
                               # it just into view
-# nudge_step = 20             # screen px per nudge-window step, so a step
-                              # looks the same at any zoom (also move-to-snap's
-                              # when there is no stop that way)
-# resize_step = 20            # screen px per grow-window / shrink-window step,
-                              # scaled by zoom like nudge_step (also
-                              # resize-to-snap's shrink when no stop is inside)
+# nudge_step = 20             # screen px per nudge-window step at any zoom
+                              # (also move-to-snap's when there is no stop
+                              # that way)
+# resize_step = 20            # screen px per grow-window / shrink-window step
+                              # at any zoom (also resize-to-snap's shrink when
+                              # no stop is inside)
 # pan_step = 100.0            # screen px per pan-viewport step
 # # Canvas points (Y-up) focus-nearest and center-nearest can land on with no
 # # window there.

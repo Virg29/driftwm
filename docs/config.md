@@ -342,13 +342,13 @@ a click on a partly off-screen window scrolls it just into view
 
 Default: `20`
 
-screen px per nudge-window step, so a step looks the same at any zoom (also move-to-snap's when there is no stop that way)
+screen px per nudge-window step at any zoom (also move-to-snap's when there is no stop that way)
 
 ### `resize_step`
 
 Default: `20`
 
-screen px per grow-window / shrink-window step, scaled by zoom like nudge_step (also resize-to-snap's shrink when no stop is inside)
+screen px per grow-window / shrink-window step at any zoom (also resize-to-snap's shrink when no stop is inside)
 
 ### `pan_step`
 

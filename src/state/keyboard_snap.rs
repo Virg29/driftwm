@@ -107,11 +107,10 @@ impl DriftWm {
         self.session_store_mark_dirty();
     }
 
-    /// The canvas px a `step` of screen px covers for `element`, signed like
-    /// `step`, so a step looks the same at any zoom: whole px, never rounded
-    /// down to nothing. Measured at the zoom where the view showing it lands:
-    /// the active output's when it lands showing the element, since that is
-    /// the view move-to-snap scrolls, else `output_for_window`'s.
+    /// The canvas px that `step` screen px cover for `element`, keeping the
+    /// sign and never rounding a nonzero step down to nothing. Measured at the
+    /// landing zoom of the active output if that view shows the element's
+    /// centre (the view move-to-snap scrolls), else of `output_for_window`.
     pub(crate) fn canvas_step(&self, element: &StageWindow, step: i32) -> i32 {
         if step == 0 {
             return 0;
