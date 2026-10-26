@@ -142,6 +142,26 @@ const PT_TO_PX: f32 = 4.0 / 3.0;
 /// Close-button × stroke width as a fraction of the title bar height
 /// (~1.25px at the default 25px bar). Scales with bar height and output scale.
 const CLOSE_BTN_STROKE: f64 = 0.05;
+/// Largest side, in buffer pixels, of any chrome buffer rasterized from a
+/// window or stand-in size. A client can size its surface without limit, so
+/// past this its chrome renders clamped and stretches to fit.
+pub const MAX_BUFFER_EXTENT: i32 = 16384;
+/// Most pixels a stand-in's body fill is rasterized with (64 MiB). The fill
+/// spans both of the stand-in's sides, so a per-side cap alone would still
+/// allow a gigabyte; past this it renders at a lower resolution instead.
+const MAX_BODY_FILL_PIXELS: f64 = 4096.0 * 4096.0;
+
+fn buffer_extent(logical: i32, s: i32) -> i32 {
+    logical.max(1).saturating_mul(s).min(MAX_BUFFER_EXTENT)
+}
+
+fn rgba_len(w: i32, h: i32) -> usize {
+    usize::try_from(w)
+        .ok()
+        .zip(usize::try_from(h).ok())
+        .and_then(|(w, h)| w.checked_mul(h)?.checked_mul(4))
+        .expect("buffer sides are clamped")
+}
 
 /// Close button hit area: a square on the right side of the title bar.
 pub fn close_button_rect(
@@ -260,15 +280,15 @@ pub fn render_title_bar(
     config: &DecorationConfig,
 ) -> MemoryRenderBuffer {
     let s = scale.max(1);
-    let h = config.title_bar_height * s;
-    let w = width.max(1) * s;
+    let h = buffer_extent(config.title_bar_height, s);
+    let w = buffer_extent(width, s);
     let bg = config.bg_color;
     let fg = config.fg_color;
-    let cr = ((corner_radius * s) as f64)
+    let cr = (corner_radius as f64 * s as f64)
         .min(w as f64 / 2.0)
         .min(h as f64);
 
-    let mut pixels = vec![0u8; (w * h * 4) as usize];
+    let mut pixels = vec![0u8; rgba_len(w, h)];
 
     // Fill with background color, masking top corners for rounding
     for y in 0..h {
@@ -364,15 +384,22 @@ pub fn render_body_fill(
     config: &DecorationConfig,
 ) -> MemoryRenderBuffer {
     let s = scale.max(1);
-    let w = width.max(1) * s;
-    let h = height.max(1) * s;
+    let full_w = width.max(1) as f64 * s as f64;
+    let full_h = height.max(1) as f64 * s as f64;
+    // One factor for both sides, so the corners are still round once the
+    // buffer is stretched back over the body.
+    let k = (MAX_BUFFER_EXTENT as f64 / full_w.max(full_h))
+        .min((MAX_BODY_FILL_PIXELS / (full_w * full_h)).sqrt())
+        .min(1.0);
+    let w = ((full_w * k) as i32).max(1);
+    let h = ((full_h * k) as i32).max(1);
     let bg = config.bg_color;
     let ba = bg[3] as f64 / 255.0;
-    let cr = ((config.corner_radius * s) as f64)
+    let cr = (config.corner_radius as f64 * s as f64 * k)
         .min(w as f64 / 2.0)
         .min(h as f64 / 2.0);
 
-    let mut pixels = vec![0u8; (w * h * 4) as usize];
+    let mut pixels = vec![0u8; rgba_len(w, h)];
     for y in 0..h {
         for x in 0..w {
             let idx = ((y * w + x) * 4) as usize;
@@ -563,6 +590,48 @@ mod tests {
             })
             .unwrap();
         out
+    }
+
+    fn byte_len(buf: &mut MemoryRenderBuffer) -> usize {
+        let mut len = 0;
+        buf.render()
+            .draw(|pixels| {
+                len = pixels.len();
+                Ok::<_, std::convert::Infallible>(Vec::new())
+            })
+            .unwrap();
+        len
+    }
+
+    #[test]
+    fn title_bar_for_a_window_past_the_buffer_cap_stays_within_it() {
+        let config = DecorationConfig::default();
+        let s = 2;
+        let mut bar = render_title_bar(30_000_000, true, false, s, "title", false, 8, &config);
+        let h = (config.title_bar_height * s) as usize;
+        assert_eq!(byte_len(&mut bar), MAX_BUFFER_EXTENT as usize * h * 4);
+    }
+
+    #[test]
+    fn body_fill_for_a_stand_in_past_the_buffer_cap_stays_within_it() {
+        let config = DecorationConfig::default();
+        let cap = MAX_BUFFER_EXTENT as usize;
+        let mut wide = render_body_fill(20_000, 100, 1, &config);
+        assert!(byte_len(&mut wide) <= cap * 100 * 4);
+        let mut tall = render_body_fill(100, 20_000, 1, &config);
+        assert!(byte_len(&mut tall) <= 100 * cap * 4);
+        // Sides that overflow i32 once scaled.
+        for (w, h) in [(i32::MAX, 10), (10, i32::MAX)] {
+            let mut fill = render_body_fill(w, h, 2, &config);
+            assert!(byte_len(&mut fill) <= cap * 20 * 4);
+        }
+    }
+
+    #[test]
+    fn body_fill_past_the_pixel_budget_is_rasterized_within_it() {
+        let config = DecorationConfig::default();
+        let mut fill = render_body_fill(4500, 4000, 1, &config);
+        assert!(byte_len(&mut fill) <= MAX_BODY_FILL_PIXELS as usize * 4);
     }
 
     #[test]

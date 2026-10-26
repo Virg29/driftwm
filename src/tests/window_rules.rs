@@ -522,3 +522,118 @@ size = [640, 480]
         "unmatched window must not receive a rule size, got:\n{configures}"
     );
 }
+
+/// The number of rects in a server surface's current opaque region, or `None`
+/// when it has no opaque region at all.
+fn opaque_rect_count(
+    surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+) -> Option<usize> {
+    use smithay::wayland::compositor::{SurfaceAttributes, with_states};
+    with_states(surface, |states| {
+        states
+            .cached_state
+            .get::<SurfaceAttributes>()
+            .current()
+            .opaque_region
+            .as_ref()
+            .map(|r| r.rects.len())
+    })
+}
+
+/// The server-side surface in `root`'s tree carrying the given protocol id
+/// (a client surface and its server resource share the id).
+fn server_surface_in_tree(
+    root: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    protocol_id: u32,
+) -> smithay::reexports::wayland_server::protocol::wl_surface::WlSurface {
+    use smithay::reexports::wayland_server::Resource;
+    use smithay::wayland::compositor::{TraversalAction, with_surface_tree_downward};
+    let found = std::cell::RefCell::new(None);
+    with_surface_tree_downward(
+        root,
+        (),
+        |_, _, _| TraversalAction::DoChildren(()),
+        |surface, _, _| {
+            if surface.id().protocol_id() == protocol_id {
+                *found.borrow_mut() = Some(surface.clone());
+            }
+        },
+        |_, _, _| true,
+    );
+    found.into_inner().expect("surface present in server tree")
+}
+
+/// A committed opaque region with more rects than the cap is dropped — it is
+/// only an occlusion hint, and rebuilding one that large stalls the compositor.
+#[test]
+fn an_oversized_opaque_region_is_dropped() {
+    let mut f = Fixture::with_config(config(""));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let surface = map_window(&mut f, id, "many", (400, 300));
+    let rects: Vec<_> = (0..200).map(|i| (i, i, 4, 4)).collect();
+    f.client(id).set_opaque_region(&surface, &rects);
+    f.client(id).window(&surface).commit();
+    f.roundtrip(id);
+
+    let window = window_by_app_id(&mut f, "many").unwrap();
+    assert_eq!(opaque_rect_count(&server_surface(&window)), None);
+}
+
+/// A region under the cap survives, and a rounded-corner toplevel still gets
+/// its four corner subtracts — the cap sees the post-carve count, so the carve
+/// must still happen for the small regions that keep it.
+#[test]
+fn a_small_opaque_region_keeps_its_corner_carve() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "rounded"
+corner_radius = 12
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let surface = map_window(&mut f, id, "rounded", (400, 300));
+    f.client(id)
+        .set_opaque_region(&surface, &[(0, 0, 400, 300)]);
+    f.client(id).window(&surface).commit();
+    f.roundtrip(id);
+
+    let window = window_by_app_id(&mut f, "rounded").unwrap();
+    // The client's one Add rect plus the four carved corners.
+    assert_eq!(opaque_rect_count(&server_surface(&window)), Some(5));
+}
+
+/// The cap applies per surface, so a subsurface's oversized region is dropped
+/// while its parent's small region is left alone.
+#[test]
+fn a_subsurfaces_opaque_region_is_capped_independently() {
+    use wayland_client::Proxy;
+
+    let mut f = Fixture::with_config(config(""));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let surface = map_window(&mut f, id, "host", (400, 300));
+    f.client(id)
+        .set_opaque_region(&surface, &[(0, 0, 400, 300)]);
+    let sub = f.client(id).create_subsurface(&surface, (0, 0), (120, 90));
+    let sub_id = sub.id().protocol_id();
+    let rects: Vec<_> = (0..200).map(|i| (i, i, 4, 4)).collect();
+    f.client(id).set_opaque_region(&sub, &rects);
+    sub.commit();
+    f.client(id).window(&surface).commit();
+    f.double_roundtrip(id);
+
+    let window = window_by_app_id(&mut f, "host").unwrap();
+    let root = server_surface(&window);
+    // The parent keeps its Add rect and its four carved corners.
+    assert_eq!(opaque_rect_count(&root), Some(5));
+    assert_eq!(
+        opaque_rect_count(&server_surface_in_tree(&root, sub_id)),
+        None
+    );
+}

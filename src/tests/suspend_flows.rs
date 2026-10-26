@@ -275,6 +275,35 @@ fn csd_suspend_clamps_body_shorter_than_the_bar() {
     f.state().dismiss_suspended(sid);
 }
 
+/// A window can be any size, but the stand-in it leaves is capped like a
+/// resized one, at the window's top-left.
+#[test]
+fn suspending_a_window_past_the_stand_in_cap_leaves_a_capped_stand_in() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &tmp, &["myapp"]);
+    let id = f.add_client();
+    let (surface, target) = map_at(&mut f, id, "myapp", (30_000, 20_000), (100, 100));
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&target, serial);
+
+    f.state().execute_action(&Action::SuspendWindow);
+    client_close(&mut f, id, &surface);
+
+    let sid = suspended_id(&mut f).expect("a stand-in replaced the client");
+    let s = f.state().find_suspended(sid).unwrap();
+    let cap = crate::decorations::MAX_BUFFER_EXTENT;
+    let frame = f.state().suspended_chrome().frame_size(s.size.get());
+    assert_eq!((frame.w, frame.h), (cap, cap));
+    let bar = f.state().config.decorations.title_bar_height;
+    assert_eq!(
+        f.state().stage.position_of(&StageWindow::Suspended(s)),
+        Some(Point::from((100, 100 + bar)))
+    );
+    f.state().dismiss_suspended(sid);
+}
+
 /// Firing `suspend-window` again on a focused suspended window dismisses the
 /// stand-in — the put-away gesture escalates, like a second close-button click.
 #[test]

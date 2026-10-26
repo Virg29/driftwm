@@ -1495,20 +1495,26 @@ impl DriftWm {
     /// shrinks the body under a bar of the current height so the outer footprint
     /// (bar + body) still equals the original window rect. A window shorter than
     /// the bar clamps to a 1px body: preserving the footprint would give a
-    /// zero/negative body, so the footprint grows by the shortfall instead.
+    /// zero/negative body, so the footprint grows by the shortfall instead. A
+    /// body past the stand-in ceiling is cut to it, keeping its top-left.
     pub(crate) fn standin_body_rect(
         &self,
         rect: Rectangle<i32, Logical>,
         csd: bool,
     ) -> Rectangle<i32, Logical> {
-        if !csd {
-            return rect;
-        }
-        let bar = self.config.decorations.title_bar_height;
-        let body_h = (rect.size.h - bar).max(1);
+        let body = if csd {
+            let bar = self.config.decorations.title_bar_height;
+            Rectangle::new(
+                Point::from((rect.loc.x, rect.loc.y + bar)),
+                Size::from((rect.size.w, (rect.size.h - bar).max(1))),
+            )
+        } else {
+            rect
+        };
+        let max = crate::grabs::SizeConstraints::for_suspended(self.suspended_chrome()).max;
         Rectangle::new(
-            Point::from((rect.loc.x, rect.loc.y + bar)),
-            Size::from((rect.size.w, body_h)),
+            body.loc,
+            Size::from((body.size.w.min(max.w), body.size.h.min(max.h))),
         )
     }
 

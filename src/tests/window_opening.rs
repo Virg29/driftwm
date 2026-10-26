@@ -2,8 +2,11 @@ use insta::assert_snapshot;
 use wayland_protocols_misc::server_decoration::client::org_kde_kwin_server_decoration::Mode as KdeMode;
 
 use driftwm::config::Config;
+use smithay::reexports::wayland_server::Resource as _;
 
-use super::{Fixture, adopt_last_configure, map_window, window_by_app_id};
+use super::{
+    Fixture, adopt_last_configure, keyboard_focus, map_window, server_surface, window_by_app_id,
+};
 
 /// One output, a plain toplevel. Captures the initial configure, then the
 /// post-map configure once a buffer is attached (window becomes Activated).
@@ -425,4 +428,131 @@ fn a_kde_decoration_hears_the_default_mode_then_the_mode_it_requests() {
         f.client(id).state.kde_decoration_modes,
         [KdeMode::Server, KdeMode::Client]
     );
+}
+
+/// A client can size its surface without limit, so a window of any width must
+/// open with its server-side title bar.
+#[test]
+fn a_server_decorated_window_wider_than_any_buffer_opens() {
+    let mut f = Fixture::with_config(super::config(
+        "[[window_rules]]\napp_id = \"huge\"\ndecoration = \"server\"\n",
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.set_app_id("huge");
+    window.commit();
+    f.roundtrip(id);
+
+    let window = f.client(id).window(&surface);
+    window.viewport.set_destination(30_000_000, 300);
+    window.attach_new_buffer();
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    let window = window_by_app_id(&mut f, "huge").unwrap();
+    assert_eq!(window.geometry().size.w, 30_000_000);
+    let key = crate::decorations::DecorationKey::Surface(server_surface(&window).id());
+    assert!(
+        f.state().decorations.contains_key(&key),
+        "the window got its title bar"
+    );
+}
+
+/// Map a dialog of `parent` on `id`. It is not modal until the caller sets the
+/// hint on the returned xdg-dialog object.
+fn map_dialog(
+    f: &mut Fixture,
+    id: super::client::ClientId,
+    app_id: &str,
+    parent: Option<&wayland_protocols::xdg::shell::client::xdg_toplevel::XdgToplevel>,
+) -> wayland_protocols::xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1 {
+    let dialog = f.client(id).create_window();
+    let surface = dialog.surface.clone();
+    dialog.set_app_id(app_id);
+    dialog.set_parent(parent);
+    dialog.commit();
+    f.roundtrip(id);
+    let dialog = f.client(id).window(&surface);
+    dialog.set_size(300, 200);
+    dialog.attach_new_buffer();
+    dialog.ack_last_and_commit();
+    f.double_roundtrip(id);
+    let toplevel = f.client(id).window(&surface).xdg_toplevel.clone();
+    f.client(id).get_dialog(&toplevel)
+}
+
+/// The modal hint redirects focus from the dialog's parent to the dialog, so
+/// it acts while that parent's app holds the keyboard.
+#[test]
+fn a_dialog_turning_modal_takes_focus_from_its_focused_parent() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let p_surface = map_window(&mut f, id, "parent", (800, 600));
+    let p_toplevel = f.client(id).window(&p_surface).xdg_toplevel.clone();
+    let dialog = map_dialog(&mut f, id, "dialog", Some(&p_toplevel));
+    let parent = window_by_app_id(&mut f, "parent").unwrap();
+    let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&parent, serial);
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(server_surface(&parent)),
+        "precondition: the parent holds the keyboard"
+    );
+
+    dialog.set_modal();
+    f.double_roundtrip(id);
+
+    let dialog_window = window_by_app_id(&mut f, "dialog").unwrap();
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&dialog_window)));
+}
+
+/// Any app can flag one of its windows modal at any time, so the hint must not
+/// pull the keyboard off another app's window.
+#[test]
+fn a_dialog_turning_modal_leaves_another_apps_focus_alone() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let a = f.add_client();
+    let p_surface = map_window(&mut f, a, "parent", (800, 600));
+    let p_toplevel = f.client(a).window(&p_surface).xdg_toplevel.clone();
+    let dialog = map_dialog(&mut f, a, "dialog", Some(&p_toplevel));
+    let b = f.add_client();
+    map_window(&mut f, b, "other", (400, 300));
+    let other = window_by_app_id(&mut f, "other").unwrap();
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(server_surface(&other)),
+        "precondition: the other app holds the keyboard"
+    );
+
+    dialog.set_modal();
+    f.double_roundtrip(a);
+    dialog.unset_modal();
+    dialog.set_modal();
+    f.double_roundtrip(a);
+
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&other)));
+}
+
+#[test]
+fn a_parentless_dialog_turning_modal_takes_no_focus() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let dialog = map_dialog(&mut f, id, "dialog", None);
+    map_window(&mut f, id, "other", (400, 300));
+    let other = window_by_app_id(&mut f, "other").unwrap();
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(server_surface(&other)),
+        "precondition: another window of the same app holds the keyboard"
+    );
+
+    dialog.set_modal();
+    f.double_roundtrip(id);
+
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&other)));
 }

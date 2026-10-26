@@ -634,6 +634,242 @@ fn activation_without_serial_does_not_move_focus() {
     );
 }
 
+/// The serial of the keyboard's most recent enter, as the client it entered
+/// would read it off `wl_keyboard.enter`.
+fn keyboard_enter_serial(f: &mut Fixture) -> u32 {
+    let keyboard = f.state().seat.get_keyboard().unwrap();
+    keyboard.last_enter().unwrap().into()
+}
+
+/// A sandboxed app with the keyboard can still hand focus between its own
+/// windows, citing a serial it was sent since it got the keyboard.
+#[test]
+fn a_sandboxed_app_holding_the_keyboard_activates_with_a_fresh_serial() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_restricted_client();
+    let target = map_window(&mut f, id, "target", (400, 300));
+    let requester = map_window(&mut f, id, "requester", (400, 300));
+    let serial = keyboard_enter_serial(&mut f);
+
+    f.client(id)
+        .request_activation_token_with_serial(&requester, serial);
+    f.roundtrip(id);
+    f.client(id).activate(&target);
+    f.double_roundtrip(id);
+
+    let target_win = window_by_app_id(&mut f, "target").unwrap();
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&target_win)));
+}
+
+/// The serial is client-chosen, so even one ahead of the latest enter grants
+/// nothing to a sandboxed app without the keyboard.
+#[test]
+fn a_sandboxed_app_without_focus_cannot_activate() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let sandboxed = f.add_restricted_client();
+    let target = map_window(&mut f, sandboxed, "target", (400, 300));
+    let other = f.add_client();
+    map_window(&mut f, other, "other", (400, 300));
+    let other_win = window_by_app_id(&mut f, "other").unwrap();
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(server_surface(&other_win)),
+        "precondition: another app holds the keyboard"
+    );
+    let serial = keyboard_enter_serial(&mut f);
+
+    f.client(sandboxed)
+        .request_activation_token_with_serial(&target, serial.wrapping_add(1000));
+    f.roundtrip(sandboxed);
+    assert!(
+        f.state().cursor.exec_cursor_deadline.is_none(),
+        "a refused token starts no launch cursor"
+    );
+    f.client(sandboxed).activate(&target);
+    f.double_roundtrip(sandboxed);
+
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&other_win)));
+}
+
+/// A token minted while the sandboxed app held the keyboard must not pull the
+/// keyboard back once the user has moved on to another app.
+#[test]
+fn a_sandboxed_apps_token_is_void_once_it_loses_the_keyboard() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let sandboxed = f.add_restricted_client();
+    let target = map_window(&mut f, sandboxed, "target", (400, 300));
+    let requester = map_window(&mut f, sandboxed, "requester", (400, 300));
+    let serial = keyboard_enter_serial(&mut f);
+    f.client(sandboxed)
+        .request_activation_token_with_serial(&requester, serial);
+    f.roundtrip(sandboxed);
+    let other = f.add_client();
+    map_window(&mut f, other, "other", (400, 300));
+    let other_win = window_by_app_id(&mut f, "other").unwrap();
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(server_surface(&other_win)),
+        "precondition: the user moved on to another app"
+    );
+
+    f.client(sandboxed).activate(&target);
+    f.double_roundtrip(sandboxed);
+
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&other_win)));
+}
+
+#[test]
+fn a_sandboxed_app_citing_a_serial_from_before_its_focus_cannot_activate() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_restricted_client();
+    let target = map_window(&mut f, id, "target", (400, 300));
+    let requester = map_window(&mut f, id, "requester", (400, 300));
+    let requester_win = window_by_app_id(&mut f, "requester").unwrap();
+    let stale = keyboard_enter_serial(&mut f).wrapping_sub(1);
+
+    f.client(id)
+        .request_activation_token_with_serial(&requester, stale);
+    f.roundtrip(id);
+    f.client(id).activate(&target);
+    f.double_roundtrip(id);
+
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&requester_win)));
+}
+
+/// Re-register the client's latest token as minted `age` ago, under a new
+/// token string the client then holds.
+fn age_last_token(f: &mut Fixture, id: ClientId, age: std::time::Duration) {
+    use smithay::wayland::xdg_activation::XdgActivationToken;
+    let token = XdgActivationToken::from(f.client(id).state.activation_token.clone().unwrap());
+    let state = &mut f.state().xdg_activation_state;
+    let mut data = state.data_for_token(&token).unwrap().clone();
+    data.timestamp = std::time::Instant::now().checked_sub(age).unwrap();
+    state.remove_token(&token);
+    let aged = state.create_external_token(data).0.to_string();
+    f.client(id).state.activation_token = Some(aged);
+}
+
+#[test]
+fn an_activation_token_expires() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let target = map_window(&mut f, id, "target", (400, 300));
+    let requester = map_window(&mut f, id, "requester", (400, 300));
+    let requester_win = window_by_app_id(&mut f, "requester").unwrap();
+
+    f.client(id).request_activation_token(&requester, true);
+    f.roundtrip(id);
+    age_last_token(&mut f, id, std::time::Duration::from_secs(11));
+    f.client(id).activate(&target);
+    f.double_roundtrip(id);
+
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&requester_win)));
+}
+
+/// An expired token is dropped, not just refused, so an app that never spends
+/// its tokens doesn't keep them.
+#[test]
+fn an_expired_activation_token_is_dropped_once_another_is_minted() {
+    use smithay::wayland::xdg_activation::XdgActivationToken;
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let requester = map_window(&mut f, id, "requester", (400, 300));
+    f.client(id).request_activation_token(&requester, true);
+    f.roundtrip(id);
+    age_last_token(&mut f, id, std::time::Duration::from_secs(11));
+    let aged = XdgActivationToken::from(f.client(id).state.activation_token.clone().unwrap());
+
+    f.client(id).request_activation_token(&requester, true);
+    f.roundtrip(id);
+
+    assert!(
+        f.state()
+            .xdg_activation_state
+            .data_for_token(&aged)
+            .is_none()
+    );
+}
+
+#[test]
+fn an_activation_token_is_spent_by_the_activation_it_grants() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let target = map_window(&mut f, id, "target", (400, 300));
+    let requester = map_window(&mut f, id, "requester", (400, 300));
+    f.client(id).request_activation_token(&requester, true);
+    f.roundtrip(id);
+    f.client(id).activate(&target);
+    f.double_roundtrip(id);
+    let requester_win = window_by_app_id(&mut f, "requester").unwrap();
+    let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&requester_win, serial);
+
+    f.client(id).activate(&target);
+    f.double_roundtrip(id);
+
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&requester_win)));
+}
+
+#[test]
+fn unspent_activation_tokens_are_bounded() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let requester = map_window(&mut f, id, "requester", (400, 300));
+
+    for _ in 0..300 {
+        f.client(id).request_activation_token(&requester, true);
+    }
+    f.roundtrip(id);
+
+    let held = f.state().xdg_activation_state.tokens().count();
+    assert!(held <= 256, "{held} tokens held");
+}
+
+/// A relaunch token keeps its own deadline: neither the client tokens' expiry
+/// nor their count bound may drop it while its relaunch is pending.
+#[test]
+fn a_relaunch_token_outlives_client_token_pruning() {
+    use smithay::wayland::xdg_activation::XdgActivationTokenData;
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let requester = map_window(&mut f, id, "requester", (400, 300));
+    let relaunch = {
+        let state = &mut f.state().xdg_activation_state;
+        let data = XdgActivationTokenData {
+            timestamp: std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(11))
+                .unwrap(),
+            ..Default::default()
+        };
+        let (token, data) = state.create_external_token(data);
+        data.user_data.insert_if_missing_threadsafe(|| {
+            crate::state::RelaunchMarker(crate::state::SuspendedId(1))
+        });
+        token.clone()
+    };
+
+    for _ in 0..300 {
+        f.client(id).request_activation_token(&requester, true);
+    }
+    f.roundtrip(id);
+
+    assert!(
+        f.state()
+            .xdg_activation_state
+            .data_for_token(&relaunch)
+            .is_some()
+    );
+}
+
 /// A popup's constraint target is the *parent's* output, not the pointer's:
 /// with the parent visible only on output 2 while output 1 is active, sliding
 /// the popup back into bounds must use output 2's viewport. The anchor sits at

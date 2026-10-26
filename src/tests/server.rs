@@ -89,10 +89,16 @@ impl Server {
         self.display.dispatch_clients(&mut self.state).ok();
     }
 
-    pub fn insert_client(&mut self, stream: UnixStream) {
+    /// `restricted` connects the client as a security-context listener does —
+    /// a sandboxed app.
+    pub fn insert_client(&mut self, stream: UnixStream, restricted: bool) {
+        let data = ClientState {
+            is_restricted: restricted,
+            ..ClientState::default()
+        };
         self.state
             .display_handle
-            .insert_client(stream, Arc::new(ClientState::default()))
+            .insert_client(stream, Arc::new(data))
             .unwrap();
     }
 }

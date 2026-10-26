@@ -573,9 +573,11 @@ pub fn closest_point_on_rect(
     loc: Point<i32, Logical>,
     size: Size<i32, Logical>,
 ) -> Point<f64, Logical> {
+    // Summed in f64: an i32 sum can wrap below `loc`, and `f64::clamp` panics
+    // on min > max.
     Point::from((
-        origin.x.clamp(loc.x as f64, (loc.x + size.w) as f64),
-        origin.y.clamp(loc.y as f64, (loc.y + size.h) as f64),
+        origin.x.clamp(loc.x as f64, loc.x as f64 + size.w as f64),
+        origin.y.clamp(loc.y as f64, loc.y as f64 + size.h as f64),
     ))
 }
 
@@ -1097,6 +1099,17 @@ mod tests {
         let items: Vec<(&str, Point<f64, Logical>)> = vec![];
         let result = find_nearest(origin, &Direction::Right, items.into_iter(), None::<&&str>);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn closest_point_on_a_rect_whose_far_edge_passes_i32_max() {
+        let loc = Point::from((1_000, -1_000));
+        let size = Size::from((i32::MAX, i32::MAX));
+        let far = pt(1e12, 1e12);
+        assert_eq!(
+            closest_point_on_rect(far, loc, size),
+            pt(1_000.0 + i32::MAX as f64, -1_000.0 + i32::MAX as f64)
+        );
     }
 
     fn bookmarks(entries: &[(&str, f64, f64)]) -> BTreeMap<String, [f64; 2]> {

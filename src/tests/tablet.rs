@@ -900,6 +900,29 @@ fn the_tool_cursor_is_dropped_when_the_pen_leaves_proximity() {
     );
 }
 
+/// A pen resting over a window keeps the tool on it through the lock, so the
+/// window can still ask for a tool cursor; the lock screen keeps its own.
+#[test]
+fn a_tool_cursor_set_while_locked_is_ignored() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let (id, _surface, origin) = tablet_client_with_window(&mut f);
+    pen_over_tablet_client_hiding_the_cursor(&mut f, id, origin);
+
+    let locker = f.add_client();
+    f.client(locker).lock_session();
+    f.roundtrip(locker);
+    let before = f.state().cursor.cursor_status.clone();
+    f.state()
+        .tablet_tool_image(&fake_tool(), CursorImageStatus::Hidden);
+
+    assert_eq!(
+        f.state().cursor.cursor_status,
+        before,
+        "no tool cursor may replace the lock screen's while locked"
+    );
+}
+
 /// A press over a layer grants an on-demand layer keyboard focus, resolved
 /// from the pointer's focus. A pen withholds that focus from a bar whose
 /// client has the tool bound, so the tap has to resolve the bar from the pick
