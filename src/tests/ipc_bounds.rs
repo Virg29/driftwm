@@ -67,7 +67,11 @@ fn a_move_past_the_coordinate_range_is_refused() {
     let window = window_by_app_id(&mut f, "app").unwrap();
     let before = window_position(&mut f, &window);
 
-    for to in [(i32::MAX, 0), (0, i32::MIN), (16_000_001, 0)] {
+    for to in [
+        (i32::MAX, 0),
+        (0, i32::MIN),
+        (crate::state::POSITION_LIMIT + 1, 0),
+    ] {
         let reply = dispatch(
             Request::Move {
                 window: None,
@@ -86,7 +90,7 @@ fn a_move_past_the_coordinate_range_is_refused() {
     let reply = dispatch(
         Request::Move {
             window: None,
-            to: Some((16_000_000, -16_000_000)),
+            to: Some((crate::state::POSITION_LIMIT, -crate::state::POSITION_LIMIT)),
         },
         f.state(),
     );
@@ -137,8 +141,11 @@ fn a_screenshot_region_past_the_range_is_refused() {
         );
     }
     assert!(
-        crate::ipc::resolve_screenshot_region(&region(16_000_000, 0, 32767, 100), f.state())
-            .is_ok()
+        crate::ipc::resolve_screenshot_region(
+            &region(crate::state::POSITION_LIMIT, 0, 32767, 100),
+            f.state()
+        )
+        .is_ok()
     );
 }
 

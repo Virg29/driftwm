@@ -721,9 +721,8 @@ fn body_entry_to_frame(mut entry: SessionEntry, chrome: Chrome) -> SessionEntry 
 /// Whether a saved window's geometry is safe to feed the stage: size components
 /// in `1..=MAX_BUFFER_EXTENT` (smithay's `Size::from` debug-asserts
 /// non-negative; the upper bound is the largest stand-in) and positions within
-/// a range that can't overflow `rule_to_internal`'s `i32` math.
+/// [`POSITION_LIMIT`].
 fn valid_entry_geometry(entry: &SessionEntry) -> bool {
-    const POSITION_LIMIT: i32 = 16_000_000;
     let sizes = 1..=crate::decorations::MAX_BUFFER_EXTENT;
     let [w, h] = entry.size;
     let [x, y] = entry.position;
@@ -740,10 +739,14 @@ fn valid_entry_geometry(entry: &SessionEntry) -> bool {
     ok
 }
 
-/// The canvas range a camera or bookmark point may lie in. Far past it an
-/// `f64` no longer resolves half a pixel, so a camera flight there never
-/// arrives.
-pub(crate) const CAMERA_LIMIT: f64 = 1e9;
+/// The canvas range a window position may lie in, saved or requested. Any two
+/// positions inside it stay an `i32` apart, so window-to-window math can't
+/// overflow.
+pub(crate) const POSITION_LIMIT: i32 = 1_000_000_000;
+
+/// The canvas range a camera or bookmark point may lie in: the windows' range,
+/// so a window opened wherever a command can take the view survives a restore.
+pub(crate) const CAMERA_LIMIT: f64 = POSITION_LIMIT as f64;
 
 /// Whether a durable/runtime camera seed is safe to apply: finite components
 /// within a sane canvas range and a zoom inside the real zoom bounds. An
@@ -863,8 +866,12 @@ mod tests {
             "taller than a stand-in can be"
         );
         assert!(
-            !valid_entry_geometry(&geom_entry([400, 300], [20_000_000, 0])),
-            "extreme position that would overflow rule_to_internal"
+            valid_entry_geometry(&geom_entry([400, 300], [POSITION_LIMIT, -POSITION_LIMIT])),
+            "a window as far out as a bookmark can reach is kept"
+        );
+        assert!(
+            !valid_entry_geometry(&geom_entry([400, 300], [POSITION_LIMIT + 1, 0])),
+            "a position past the limit is dropped"
         );
         assert!(!valid_entry_geometry(&geom_entry(
             [400, 300],

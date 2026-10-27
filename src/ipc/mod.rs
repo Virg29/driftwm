@@ -37,19 +37,18 @@ const MAX_CONNECTIONS: usize = 1024;
 /// a slow command (a large screenshot) doesn't eat into it.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// Bounds on canvas coordinates and sizes in a request, so the `i32` canvas
-/// math holds once chrome and centering are added. `COORD_LIMIT` mirrors the
-/// position bound session restore accepts; `SIZE_LIMIT` is a looser outer gate
-/// than the stand-in size cap, which clamps a suspended window afterward.
-const COORD_LIMIT: i32 = 16_000_000;
+/// The largest size a request may ask for: a looser outer gate than the
+/// stand-in size cap, which clamps a suspended window afterward. Coordinates
+/// share session restore's [`crate::state::POSITION_LIMIT`].
 const SIZE_LIMIT: i32 = 32767;
 
 fn check_point(x: i32, y: i32) -> Result<(), String> {
-    let range = -COORD_LIMIT..=COORD_LIMIT;
+    let limit = crate::state::POSITION_LIMIT;
+    let range = -limit..=limit;
     if range.contains(&x) && range.contains(&y) {
         Ok(())
     } else {
-        Err(format!("coordinates must be within ±{COORD_LIMIT}"))
+        Err(format!("coordinates must be within ±{limit}"))
     }
 }
 
