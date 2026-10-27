@@ -784,7 +784,7 @@ fn center_seed_restores_the_framed_viewport() {
 }
 
 /// The seed is checked after it resolves, so the bounds guard the camera the
-/// output actually takes. A centre that is itself inside the canvas limit but
+/// output actually takes. A centre that is itself inside the window range but
 /// lands outside it once the half-viewport is subtracted is refused, and the
 /// output keeps its default viewport.
 #[test]
@@ -792,7 +792,13 @@ fn a_center_seed_resolving_out_of_range_is_refused() {
     let mut f = Fixture::with_config(Config::default());
     let saved = HashMap::from([(
         "HEADLESS-1".to_string(),
-        (CameraSeed::Center { x: -1e9, y: 0.0 }, 0.5),
+        (
+            CameraSeed::Center {
+                x: -f64::from(crate::state::POSITION_LIMIT),
+                y: 0.0,
+            },
+            0.5,
+        ),
     )]);
     let (output, _global) =
         super::headless::add_output_with_saved(f.state(), 1, (1920, 1080), &saved);
