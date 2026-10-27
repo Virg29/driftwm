@@ -149,6 +149,23 @@ fn a_screenshot_region_past_the_range_is_refused() {
     );
 }
 
+/// A screen point in range lands, zoomed out, far past the canvas range.
+#[test]
+fn a_screen_region_landing_past_the_canvas_range_is_refused() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.state().with_output_state(|os| os.zoom = 0.4);
+
+    let target = ScreenshotTarget::Region {
+        x: 999_999_999,
+        y: 0,
+        w: 100,
+        h: 100,
+        from_screen: true,
+    };
+    assert!(crate::ipc::resolve_screenshot_region(&target, f.state()).is_err());
+}
+
 #[test]
 fn the_registry_takes_no_new_name_past_256_bookmarks() {
     let mut f = Fixture::new();

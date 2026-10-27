@@ -197,6 +197,11 @@ fn serve_connection(
         tracing::warn!("IPC command too large, disconnecting");
         return disconnect(stream, state);
     }
+    // Only the bytes just read can complete a command: rescanning a long
+    // partial one on every read would stall the loop.
+    if !chunk[..n].contains(&b'\n') {
+        return PostAction::Continue;
+    }
     while let Some(nl) = buffer.iter().position(|&b| b == b'\n') {
         let line: Vec<u8> = buffer.drain(..=nl).collect();
         // A half-written pushed event must be flushed before any
@@ -215,6 +220,9 @@ fn serve_connection(
             return disconnect(stream, state);
         }
     }
+    // A long command leaves its capacity behind on a connection that may live
+    // on as a subscriber.
+    buffer.shrink_to(4096);
     PostAction::Continue
 }
 
@@ -1127,10 +1135,15 @@ pub(crate) fn resolve_screenshot_region(
                     let os = crate::state::output_state(&output);
                     (os.camera, os.zoom)
                 };
-                let loc = Point::<i32, Logical>::from((
-                    (camera.x + (x - layout_pos.x) as f64 / zoom).round() as i32,
-                    (camera.y + (y - layout_pos.y) as f64 / zoom).round() as i32,
-                ));
+                let canvas_x = camera.x + (x - layout_pos.x) as f64 / zoom;
+                let canvas_y = camera.y + (y - layout_pos.y) as f64 / zoom;
+                // Zoomed out, a screen point in range can land on the canvas
+                // far past it.
+                if !crate::state::valid_canvas_point(canvas_x, canvas_y) {
+                    return Err("region lies past the canvas range".to_string());
+                }
+                let loc =
+                    Point::<i32, Logical>::from((canvas_x.round() as i32, canvas_y.round() as i32));
                 let size = Size::<i32, Logical>::from((
                     (w as f64 / zoom).round() as i32,
                     (h as f64 / zoom).round() as i32,
