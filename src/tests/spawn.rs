@@ -1,6 +1,6 @@
 //! What a child spawned through `spawn_command` gets from the compositor: the
 //! open-file limit driftwm started with, not the one it raised for itself, no
-//! fd driftwm left open, and a session of its own.
+//! fd driftwm left open, and the compositor's own session.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -83,12 +83,18 @@ fn a_child_inherits_no_fd_the_compositor_left_open() {
     );
 }
 
-#[test]
-fn a_child_leads_its_own_session() {
-    let stat = output_of("cat /proc/$$/stat");
+/// The session field of a `/proc/<pid>/stat` line.
+fn session_of(stat: &str) -> String {
     // `pid (comm) state ppid pgrp session ...`; comm may hold spaces.
-    let pid = stat.split_whitespace().next().unwrap();
     let after_comm = &stat[stat.rfind(')').unwrap() + 1..];
-    let session = after_comm.split_whitespace().nth(3).unwrap();
-    assert_eq!(session, pid, "the shell is its own session leader");
+    after_comm.split_whitespace().nth(3).unwrap().to_owned()
+}
+
+/// A child left in the compositor's session is hung up with it, so a TTY
+/// logout still ends autostarted daemons.
+#[test]
+fn a_child_stays_in_the_compositors_session() {
+    let child = output_of("cat /proc/$$/stat");
+    let ours = std::fs::read_to_string("/proc/self/stat").unwrap();
+    assert_eq!(session_of(&child), session_of(&ours));
 }

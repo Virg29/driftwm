@@ -356,9 +356,7 @@ pub fn raise_nofile_limit() {
 /// with their own signal handlers still see those signals normally.
 ///
 /// Every fd past stdio goes close-on-exec: libraries open some without it (the
-/// GPU render node among them), and a child has no use for any. The child also
-/// leaves the compositor's session, so a VT driftwm was started from is not its
-/// controlling terminal.
+/// GPU render node among them), and a child has no use for any.
 pub(crate) fn prepare_child() -> std::io::Result<()> {
     // SAFETY: async-signal-safe, and SIG_DFL is always a valid disposition.
     unsafe { libc::signal(libc::SIGCHLD, libc::SIG_DFL) };
@@ -383,9 +381,6 @@ pub(crate) fn prepare_child() -> std::io::Result<()> {
             libc::CLOSE_RANGE_CLOEXEC,
         )
     };
-    // SAFETY: async-signal-safe; a forked child is never a group leader, so
-    // this can't fail.
-    unsafe { libc::setsid() };
     Ok(())
 }
 
