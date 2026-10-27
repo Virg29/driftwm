@@ -112,16 +112,17 @@ fn connections_past_the_cap_are_dropped_and_a_freed_slot_is_reused() {
     let temp = TempDir::new();
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
-    let ipc = f.start_ipc(temp.path());
+    let cap = 8;
+    let ipc = f.start_ipc_with_cap(temp.path(), cap);
 
-    let mut held: Vec<UnixStream> = (0..64).map(|_| connect(&ipc)).collect();
+    let mut held: Vec<UnixStream> = (0..cap).map(|_| connect(&ipc)).collect();
     f.pump(2);
     assert!(
         answered(&mut f, &mut held[0]),
         "a connection under the cap is served"
     );
     assert!(
-        answered(&mut f, &mut held[63]),
+        answered(&mut f, &mut held[cap - 1]),
         "the cap's last slot is served"
     );
 

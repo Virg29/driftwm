@@ -26,11 +26,11 @@ use self::protocol::{
 
 /// Reject a command line longer than this (without a newline) — bounds the
 /// per-connection buffer against a client that never terminates a command.
-const MAX_COMMAND_SIZE: usize = 4096;
+const MAX_COMMAND_SIZE: usize = 1 << 20;
 
 /// Connections served at once. One past it is accepted and closed straight
 /// away, which also takes it off the level-triggered listener.
-const MAX_CONNECTIONS: usize = 64;
+const MAX_CONNECTIONS: usize = 1024;
 
 /// Cap how long the writes of one reply may block in all, so a stuck or
 /// trickling reader can't hang the loop. It starts once the reply is ready, so
@@ -80,6 +80,15 @@ impl IpcServer {
         event_loop: &LoopHandle<'static, DriftWm>,
         socket_path: PathBuf,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::with_cap(event_loop, socket_path, MAX_CONNECTIONS)
+    }
+
+    /// [`Self::new_at`], serving at most `max_connections` at once.
+    pub(crate) fn with_cap(
+        event_loop: &LoopHandle<'static, DriftWm>,
+        socket_path: PathBuf,
+        max_connections: usize,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         std::fs::remove_file(&socket_path).ok();
         if let Some(parent) = socket_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -98,11 +107,11 @@ impl IpcServer {
         event_loop.insert_source(source, move |_, listener, state| {
             loop {
                 match listener.accept() {
-                    Ok((stream, _)) if Rc::strong_count(&slots) > MAX_CONNECTIONS => {
+                    Ok((stream, _)) if Rc::strong_count(&slots) > max_connections => {
                         tracing::debug!(
-                            "IPC: {MAX_CONNECTIONS} connections open, closing a new one"
+                            "IPC: {max_connections} connections open, closing a new one"
                         );
-                        refuse_connection(stream);
+                        refuse_connection(stream, max_connections);
                     }
                     Ok((stream, _)) => accept_client(state, stream, slots.clone()),
                     Err(e) if e.kind() == ErrorKind::WouldBlock => break,
@@ -131,10 +140,10 @@ impl Drop for IpcServer {
 /// Tell a connection past the cap why it is closed, so `driftwm msg` reports
 /// more than a missing reply. Never blocks: a fresh socket takes one short
 /// line, and a write that fails anyway changes nothing.
-fn refuse_connection(stream: UnixStream) {
+fn refuse_connection(stream: UnixStream, max_connections: usize) {
     let _ = stream.set_nonblocking(true);
     let reply: Reply = Err(format!(
-        "{MAX_CONNECTIONS} IPC connections are already open"
+        "{max_connections} IPC connections are already open"
     ));
     if let Ok(mut line) = serde_json::to_vec(&reply) {
         line.push(b'\n');

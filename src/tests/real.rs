@@ -59,6 +59,17 @@ impl Fixture {
         path
     }
 
+    /// [`Self::start_ipc`] serving at most `max_connections` at once, so a test
+    /// can fill the cap without holding the real one's worth of fds.
+    pub fn start_ipc_with_cap(&mut self, dir: &Path, max_connections: usize) -> PathBuf {
+        let path = dir.join("ipc.sock");
+        let handle = self.state().loop_handle.clone();
+        let server = crate::ipc::IpcServer::with_cap(&handle, path.clone(), max_connections)
+            .expect("start ipc server");
+        self.state().ipc_server = Some(server);
+        path
+    }
+
     /// Drive the fixture until `predicate` holds, failing the test on timeout.
     /// A real client blocks on `wl_surface.frame` before drawing its next frame,
     /// and nothing off-screen sends those under the fixture — so each round pumps
