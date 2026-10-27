@@ -67,7 +67,7 @@ pub fn render_screencopy(
     use driftwm::protocols::screencopy::ScreencopyBuffer;
     use smithay::backend::renderer::{ExportMem, Renderer};
 
-    let timestamp = state.start_time.elapsed();
+    let timestamp = crate::state::monotonic_now();
     let min_interval = capture_min_interval(state.config.backend.max_capture_fps);
     let capture_key = format!("sc:{}", output.name());
 
@@ -415,7 +415,7 @@ pub fn render_capture_frames(
 ) {
     use smithay::backend::renderer::{ExportMem, Renderer};
 
-    let timestamp = state.start_time.elapsed();
+    let timestamp = crate::state::monotonic_now();
     let min_interval = capture_min_interval(state.config.backend.max_capture_fps);
 
     // Promote sessions waiting for damage on this output (max_capture_fps gated).
@@ -600,7 +600,7 @@ pub fn render_toplevel_captures(state: &mut crate::state::DriftWm, renderer: &mu
     use smithay::backend::renderer::{ExportMem, Renderer};
     use smithay::utils::Point;
 
-    let timestamp = state.start_time.elapsed();
+    let timestamp = crate::state::monotonic_now();
     let min_interval = capture_min_interval(state.config.backend.max_capture_fps);
 
     state

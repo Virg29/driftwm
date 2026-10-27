@@ -152,7 +152,7 @@ pub struct CaptureOutputState {
     pub age: usize,
     /// Reset age when cursor inclusion changes between frames.
     pub last_paint_cursors: bool,
-    /// Time (since `start_time`) this state was last rendered into; idle
+    /// [`monotonic_now`] when this state was last rendered into; idle
     /// entries are evicted so a finished capture's texture doesn't linger
     /// until output disconnect.
     pub last_used: std::time::Duration,
@@ -391,6 +391,14 @@ pub(crate) fn prepare_child() -> std::io::Result<()> {
 /// `env` is layered on top of inherited env (toolkit defaults + user `[env]` +
 /// XCURSOR_*); driftwm never mutates its own process env at runtime, so this
 /// is the only way config-defined env vars reach children.
+/// Now on `CLOCK_MONOTONIC`, the clock driftwm advertises for presentation
+/// times. A capture client lines its audio up against these stamps.
+pub fn monotonic_now() -> std::time::Duration {
+    smithay::utils::Clock::<smithay::utils::Monotonic>::new()
+        .now()
+        .into()
+}
+
 pub fn spawn_command(cmd: &str, env: &HashMap<String, String>) {
     use std::os::unix::process::CommandExt;
     let mut child = std::process::Command::new("sh");

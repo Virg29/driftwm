@@ -45,6 +45,8 @@ pub struct CaptureRecord {
     /// stride of zero.
     pub shm: Option<(i32, i32, i32)>,
     pub ready: bool,
+    /// The frame's timestamp: wlr `ready`, ext `presentation_time`.
+    pub presented: Option<std::time::Duration>,
     pub failed: bool,
     /// The ext frame's `failed` reason.
     pub failure_reason: Option<ext_image_copy_capture_frame_v1::FailureReason>,
@@ -176,6 +178,11 @@ impl Client {
     }
 }
 
+/// A protocol timestamp's split seconds and nanoseconds.
+fn stamp(tv_sec_hi: u32, tv_sec_lo: u32, tv_nsec: u32) -> std::time::Duration {
+    std::time::Duration::new((u64::from(tv_sec_hi) << 32) | u64::from(tv_sec_lo), tv_nsec)
+}
+
 impl Dispatch<WlRegistry, Globals> for State {
     fn event(
         _state: &mut Self,
@@ -224,7 +231,14 @@ impl Dispatch<ZwlrScreencopyFrameV1, Record> for State {
                 height,
                 stride,
             } => record.shm = Some((width as i32, height as i32, stride as i32)),
-            zwlr_screencopy_frame_v1::Event::Ready { .. } => record.ready = true,
+            zwlr_screencopy_frame_v1::Event::Ready {
+                tv_sec_hi,
+                tv_sec_lo,
+                tv_nsec,
+            } => {
+                record.ready = true;
+                record.presented = Some(stamp(tv_sec_hi, tv_sec_lo, tv_nsec));
+            }
             zwlr_screencopy_frame_v1::Event::Failed => record.failed = true,
             _ => (),
         }
@@ -263,6 +277,11 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, Record> for State {
         let mut record = record.lock().unwrap();
         match event {
             ext_image_copy_capture_frame_v1::Event::Ready => record.ready = true,
+            ext_image_copy_capture_frame_v1::Event::PresentationTime {
+                tv_sec_hi,
+                tv_sec_lo,
+                tv_nsec,
+            } => record.presented = Some(stamp(tv_sec_hi, tv_sec_lo, tv_nsec)),
             ext_image_copy_capture_frame_v1::Event::Failed { reason } => {
                 record.failed = true;
                 record.failure_reason = reason.into_result().ok();

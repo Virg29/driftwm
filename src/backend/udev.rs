@@ -224,7 +224,7 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
     // (kept warm while one renders into them). Only fires on render-active
     // cycles, so a fully-idle stop frees on next activity — memory, not battery.
     data.render
-        .evict_idle_capture_state(data.start_time.elapsed());
+        .evict_idle_capture_state(crate::state::monotonic_now());
 
     let Some(device) = data.udev_device.clone() else {
         return;

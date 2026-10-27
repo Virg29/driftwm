@@ -1,7 +1,8 @@
 //! Screen capture through the wire protocols, rendered by a real GL context:
 //! a wlr-screencopy region shows that region of the output, and both capture
 //! protocols write a client's shm buffer where the buffer says, at its offset
-//! and stride, failing the frame when the buffer doesn't fit.
+//! and stride, failing the frame when the buffer doesn't fit, and stamp it on
+//! the monotonic clock.
 //!
 //! `#[ignore]`d out of the default lane like the other pixel scenarios (needs
 //! Mesa's surfaceless EGL, self-skipping when that is missing); each scenario
@@ -323,6 +324,57 @@ fn an_ext_capture_follows_the_buffers_offset_and_stride() {
         slack_untouched(&bytes, offset, stride, (w, h)),
         "row padding and pool slack stay untouched"
     );
+
+    teardown(f, &output);
+}
+
+/// A recorder lines its audio up against the frame's stamp, so both protocols
+/// stamp on `CLOCK_MONOTONIC`, the clock driftwm advertises.
+#[test]
+#[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
+fn a_captured_frame_is_stamped_on_the_monotonic_clock() {
+    let _gl = gl::lock();
+    let Some((mut f, output, client)) = setup("capture timestamp") else {
+        return;
+    };
+    let name = output.name();
+
+    let globals = f.client(client).bind_capture_globals();
+    f.roundtrip(client);
+    let (wlr, wlr_record) = f.client(client).wlr_capture(&globals, &name, None);
+    let (session, session_record) = f.client(client).ext_capture_session(&globals, &name);
+    f.roundtrip(client);
+    let (w, h, _) = session_record
+        .lock()
+        .unwrap()
+        .shm
+        .expect("the session announced its buffer size");
+    let _wlr_buffer = wlr_copy(&mut f, client, &wlr, &wlr_record, 0, 0);
+    let ext_buffer = f.client(client).capture_buffer(
+        Format::Argb8888,
+        (w, h),
+        w * 4,
+        0,
+        (w * 4 * h) as usize,
+        FILL,
+    );
+    let (_frame, ext_record) = f.client(client).ext_capture(&session, &ext_buffer.buffer);
+    f.roundtrip(client);
+    render_captures(&mut f, &output);
+    f.roundtrip(client);
+
+    let now = crate::state::monotonic_now();
+    for (protocol, record) in [("wlr", &wlr_record), ("ext", &ext_record)] {
+        let stamp = record
+            .lock()
+            .unwrap()
+            .presented
+            .unwrap_or_else(|| panic!("the {protocol} frame was stamped"));
+        assert!(
+            now.abs_diff(stamp) < std::time::Duration::from_secs(2),
+            "{protocol} stamped {stamp:?}, monotonic now is {now:?}"
+        );
+    }
 
     teardown(f, &output);
 }

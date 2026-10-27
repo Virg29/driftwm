@@ -301,7 +301,7 @@ pub fn init_winit(
             crate::render::refresh_ext_workspaces(data);
             crate::render::post_render(data, &output);
             data.render
-                .evict_idle_capture_state(data.start_time.elapsed());
+                .evict_idle_capture_state(crate::state::monotonic_now());
             data.display_handle.flush_clients().ok();
 
             #[cfg(feature = "profile-with-tracy")]
