@@ -641,8 +641,7 @@ fn keyboard_enter_serial(f: &mut Fixture) -> u32 {
     keyboard.last_enter().unwrap().into()
 }
 
-/// A sandboxed app with the keyboard can still hand focus between its own
-/// windows, citing a serial it was sent since it got the keyboard.
+/// A sandboxed app with the keyboard hands focus between its own windows.
 #[test]
 fn a_sandboxed_app_holding_the_keyboard_activates_with_a_fresh_serial() {
     let mut f = Fixture::new();
@@ -662,10 +661,9 @@ fn a_sandboxed_app_holding_the_keyboard_activates_with_a_fresh_serial() {
     assert_eq!(keyboard_focus(&mut f), Some(server_surface(&target_win)));
 }
 
-/// The serial is client-chosen, so even one ahead of the latest enter grants
-/// nothing to a sandboxed app without the keyboard.
+/// A tray or notification click mints a token while another app has the keyboard.
 #[test]
-fn a_sandboxed_app_without_focus_cannot_activate() {
+fn a_sandboxed_app_raises_its_window_from_the_background() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
     let sandboxed = f.add_restricted_client();
@@ -678,66 +676,16 @@ fn a_sandboxed_app_without_focus_cannot_activate() {
         Some(server_surface(&other_win)),
         "precondition: another app holds the keyboard"
     );
-    let serial = keyboard_enter_serial(&mut f);
-
-    f.client(sandboxed)
-        .request_activation_token_with_serial(&target, serial.wrapping_add(1000));
-    f.roundtrip(sandboxed);
-    assert!(
-        f.state().cursor.exec_cursor_deadline.is_none(),
-        "a refused token starts no launch cursor"
-    );
-    f.client(sandboxed).activate(&target);
-    f.double_roundtrip(sandboxed);
-
-    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&other_win)));
-}
-
-/// A token minted while the sandboxed app held the keyboard must not pull the
-/// keyboard back once the user has moved on to another app.
-#[test]
-fn a_sandboxed_apps_token_is_void_once_it_loses_the_keyboard() {
-    let mut f = Fixture::new();
-    f.add_output(1, (1920, 1080));
-    let sandboxed = f.add_restricted_client();
-    let target = map_window(&mut f, sandboxed, "target", (400, 300));
-    let requester = map_window(&mut f, sandboxed, "requester", (400, 300));
-    let serial = keyboard_enter_serial(&mut f);
-    f.client(sandboxed)
-        .request_activation_token_with_serial(&requester, serial);
-    f.roundtrip(sandboxed);
-    let other = f.add_client();
-    map_window(&mut f, other, "other", (400, 300));
-    let other_win = window_by_app_id(&mut f, "other").unwrap();
-    assert_eq!(
-        keyboard_focus(&mut f),
-        Some(server_surface(&other_win)),
-        "precondition: the user moved on to another app"
-    );
-
-    f.client(sandboxed).activate(&target);
-    f.double_roundtrip(sandboxed);
-
-    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&other_win)));
-}
-
-#[test]
-fn a_sandboxed_app_citing_a_serial_from_before_its_focus_cannot_activate() {
-    let mut f = Fixture::new();
-    f.add_output(1, (1920, 1080));
-    let id = f.add_restricted_client();
-    let target = map_window(&mut f, id, "target", (400, 300));
-    let requester = map_window(&mut f, id, "requester", (400, 300));
-    let requester_win = window_by_app_id(&mut f, "requester").unwrap();
     let stale = keyboard_enter_serial(&mut f).wrapping_sub(1);
 
-    f.client(id)
-        .request_activation_token_with_serial(&requester, stale);
-    f.roundtrip(id);
-    f.client(id).activate(&target);
-    f.double_roundtrip(id);
+    f.client(sandboxed)
+        .request_activation_token_with_serial(&target, stale);
+    f.roundtrip(sandboxed);
+    f.client(sandboxed).activate(&target);
+    f.double_roundtrip(sandboxed);
 
-    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&requester_win)));
+    let target_win = window_by_app_id(&mut f, "target").unwrap();
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&target_win)));
 }
 
 /// Re-register the client's latest token as minted `age` ago, under a new
