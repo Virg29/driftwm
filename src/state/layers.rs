@@ -8,9 +8,50 @@
 
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Logical, Point};
+use smithay::utils::{Logical, Point, Rectangle};
+use smithay::wayland::shell::wlr_layer::Anchor;
 
 use super::DriftWm;
+
+/// Where `layer` is drawn, given `geo`, its map rect: the attached buffer's
+/// size at the location arranged for its configured size. Until the client
+/// acks a configure that changes that size, the old buffer would sit at the
+/// new location (a bottom-anchored bar that grows would flash it at the top of
+/// the grown rect), so it stays against the edges the surface is anchored to
+/// instead, centred on an axis anchored to both edges or neither.
+fn drawn_layer_rect(
+    layer: &smithay::desktop::LayerSurface,
+    geo: Rectangle<i32, Logical>,
+) -> Rectangle<i32, Logical> {
+    let shell = layer.layer_surface();
+    let configured = shell.with_pending_state(|state| state.size);
+    let acked = shell.with_committed_state(|state| state.and_then(|s| s.size));
+    let Some(configured) = configured.filter(|&size| Some(size) != acked) else {
+        return geo;
+    };
+    let anchor = layer.cached_state().anchor;
+    let dx = anchored_shift(
+        configured.w - geo.size.w,
+        anchor.contains(Anchor::LEFT),
+        anchor.contains(Anchor::RIGHT),
+    );
+    let dy = anchored_shift(
+        configured.h - geo.size.h,
+        anchor.contains(Anchor::TOP),
+        anchor.contains(Anchor::BOTTOM),
+    );
+    Rectangle::new(geo.loc + Point::from((dx, dy)), geo.size)
+}
+
+/// How far a buffer `slack` px short of its configured span moves along an
+/// axis, by which of the axis's two edges the surface is anchored to.
+fn anchored_shift(slack: i32, near: bool, far: bool) -> i32 {
+    match (near, far) {
+        (true, false) => 0,
+        (false, true) => slack,
+        _ => slack / 2,
+    }
+}
 
 /// A layer surface pinned to a canvas position instead of being anchored
 /// via LayerMap. Created when a layer's namespace matches a rule with `position`.
@@ -65,7 +106,7 @@ impl DriftWm {
                     order,
                     map_idx,
                     s.clone(),
-                    map.layer_geometry(s).unwrap_or_default(),
+                    drawn_layer_rect(s, map.layer_geometry(s).unwrap_or_default()),
                 )
             })
             .collect();
