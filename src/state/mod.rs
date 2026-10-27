@@ -386,19 +386,19 @@ pub(crate) fn prepare_child() -> std::io::Result<()> {
     Ok(())
 }
 
-/// Spawn a shell command, reset by [`prepare_child`].
-///
-/// `env` is layered on top of inherited env (toolkit defaults + user `[env]` +
-/// XCURSOR_*); driftwm never mutates its own process env at runtime, so this
-/// is the only way config-defined env vars reach children.
-/// Now on `CLOCK_MONOTONIC`, the clock driftwm advertises for presentation
-/// times. A capture client lines its audio up against these stamps.
+/// The current time on `CLOCK_MONOTONIC`, the clock driftwm advertises for
+/// presentation times. A capture client lines its audio up against these stamps.
 pub fn monotonic_now() -> std::time::Duration {
     smithay::utils::Clock::<smithay::utils::Monotonic>::new()
         .now()
         .into()
 }
 
+/// Spawn a shell command, reset by [`prepare_child`].
+///
+/// `env` is layered on top of inherited env (toolkit defaults + user `[env]` +
+/// XCURSOR_*); driftwm never mutates its own process env at runtime, so this
+/// is the only way config-defined env vars reach children.
 pub fn spawn_command(cmd: &str, env: &HashMap<String, String>) {
     use std::os::unix::process::CommandExt;
     let mut child = std::process::Command::new("sh");
