@@ -739,7 +739,9 @@ fn valid_entry_geometry(entry: &SessionEntry) -> bool {
     ok
 }
 
-/// The canvas range a camera or bookmark point may lie in.
+/// The canvas range `msg camera` and bookmarks may point the view at.
+/// Navigating to a window can take it a little further, up to the windows'
+/// [`POSITION_LIMIT`], which a restored camera is checked against.
 pub(crate) const CAMERA_LIMIT: f64 = 1e9;
 
 /// The canvas range a window position may lie in, saved or requested: the
@@ -753,13 +755,20 @@ pub(crate) const POSITION_LIMIT: i32 = 1_050_000_000;
 /// invalid seed (`zoom: 0.0`, non-finite, corruption) is skipped so it can't
 /// warp the pointer to infinity or divide every canvas conversion by zero.
 pub(crate) fn valid_camera_seed(camera: Point<f64, Logical>, zoom: f64) -> bool {
-    valid_canvas_point(camera.x, camera.y)
+    within_window_range(camera.x, camera.y)
         && zoom.is_finite()
         && (driftwm::canvas::MIN_ZOOM_FLOOR..=driftwm::canvas::MAX_ZOOM).contains(&zoom)
 }
 
 pub(crate) fn valid_canvas_point(x: f64, y: f64) -> bool {
     x.is_finite() && y.is_finite() && x.abs() <= CAMERA_LIMIT && y.abs() <= CAMERA_LIMIT
+}
+
+/// Whether a point lies in the windows' range: where navigating to a window
+/// can take the view.
+pub(crate) fn within_window_range(x: f64, y: f64) -> bool {
+    let limit = f64::from(POSITION_LIMIT);
+    x.is_finite() && y.is_finite() && x.abs() <= limit && y.abs() <= limit
 }
 
 /// The registry takes no new name past this many bookmarks.
@@ -944,8 +953,15 @@ mod tests {
             "a non-finite camera is refused even under a sane zoom"
         );
 
-        // A centre inside the canvas limit can still resolve past it.
-        let camera = CameraSeed::Center { x: -1e9, y: 0.0 }.resolve(0.5, logical);
+        // A centre inside the window range can still resolve past it.
+        let edge = -f64::from(POSITION_LIMIT);
+        let camera = CameraSeed::Center { x: edge, y: 0.0 }.resolve(0.5, logical);
         assert!(!valid_camera_seed(camera, 0.5));
+    }
+
+    #[test]
+    fn a_view_left_beside_a_window_past_the_camera_range_is_restored() {
+        let camera = Point::from((CAMERA_LIMIT + 2e7, 0.0));
+        assert!(valid_camera_seed(camera, 1.0));
     }
 }

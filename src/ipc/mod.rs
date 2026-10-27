@@ -1139,7 +1139,7 @@ pub(crate) fn resolve_screenshot_region(
                 let canvas_y = camera.y + (y - layout_pos.y) as f64 / zoom;
                 // Zoomed out, a screen point in range can land on the canvas
                 // far past it.
-                if !crate::state::valid_canvas_point(canvas_x, canvas_y) {
+                if !crate::state::within_window_range(canvas_x, canvas_y) {
                     return Err("region lies past the canvas range".to_string());
                 }
                 let loc =

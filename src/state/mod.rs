@@ -55,7 +55,9 @@ pub use navigation::{NavZoom, RevealPan};
 pub use persistence::{read_all_per_output_state, remove_state_file};
 pub use render_cache::{BorderCacheEntry, RenderCache, ShadowCacheEntry};
 pub(crate) use resize::{owes_a_configured_size, resize_constraints};
-pub(crate) use session_store::{CAMERA_LIMIT, POSITION_LIMIT, valid_canvas_point};
+pub(crate) use session_store::{
+    CAMERA_LIMIT, POSITION_LIMIT, valid_canvas_point, within_window_range,
+};
 pub use session_store::{CameraSeed, SessionStore};
 pub use stage_window::{StageWindow, SuspendedId, SuspendedWindow};
 pub use suspended::{
