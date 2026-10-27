@@ -110,7 +110,7 @@ fn rgb_pixels(bytes: &[u8], offset: usize, stride: usize, (w, h): (i32, i32)) ->
     let mut px = Vec::with_capacity((w * h) as usize);
     for row in 0..h as usize {
         let start = offset + row * stride;
-        for p in bytes[start..start + w as usize * 4].chunks_exact(4) {
+        for p in bytes[start..start + w as usize * 4].as_chunks::<4>().0 {
             px.push([p[2], p[1], p[0]]);
         }
     }
