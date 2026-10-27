@@ -739,14 +739,14 @@ fn valid_entry_geometry(entry: &SessionEntry) -> bool {
     ok
 }
 
-/// The canvas range a window position may lie in, saved or requested. Any two
-/// positions inside it stay an `i32` apart, so window-to-window math can't
-/// overflow.
-pub(crate) const POSITION_LIMIT: i32 = 1_000_000_000;
+/// The canvas range a camera or bookmark point may lie in.
+pub(crate) const CAMERA_LIMIT: f64 = 1e9;
 
-/// The canvas range a camera or bookmark point may lie in: the windows' range,
-/// so a window opened wherever a command can take the view survives a restore.
-pub(crate) const CAMERA_LIMIT: f64 = POSITION_LIMIT as f64;
+/// The canvas range a window position may lie in, saved or requested: the
+/// camera's range plus headroom, so a window placed beside one at the camera's
+/// edge still survives a restore. Any two positions inside it stay an `i32`
+/// apart, so window-to-window math can't overflow.
+pub(crate) const POSITION_LIMIT: i32 = 1_050_000_000;
 
 /// Whether a durable/runtime camera seed is safe to apply: finite components
 /// within a sane canvas range and a zoom inside the real zoom bounds. An
@@ -867,7 +867,7 @@ mod tests {
         );
         assert!(
             valid_entry_geometry(&geom_entry([400, 300], [POSITION_LIMIT, -POSITION_LIMIT])),
-            "a window as far out as a bookmark can reach is kept"
+            "a window at the limit is kept"
         );
         assert!(
             !valid_entry_geometry(&geom_entry([400, 300], [POSITION_LIMIT + 1, 0])),
