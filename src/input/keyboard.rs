@@ -41,9 +41,6 @@ impl DriftWm {
         // When session is locked, only allow VT switching — forward everything else
         if self.session_lock.is_locked() {
             let keyboard = self.seat.get_keyboard().unwrap();
-            // `lock()` drops any grab, but an input method can grab again
-            // mid-lock and smithay installs it with no hook to refuse.
-            keyboard.unset_grab(self);
             keyboard.input::<(), _>(
                 self,
                 keycode,
