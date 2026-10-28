@@ -1128,6 +1128,11 @@ impl DriftWm {
             self.canvas_layers[idx].configured_size = Some(size);
         }
 
+        crate::handlers::layer_shell::send_layer_preferred_scale(
+            &self.canvas_layers[idx].surface,
+            &self.canvas_layers[idx].output,
+        );
+
         self.update_keyboard_focus(smithay::utils::SERIAL_COUNTER.next_serial());
 
         self.popups.commit(surface);
@@ -1172,9 +1177,13 @@ impl DriftWm {
                 .unwrap_or(true)
         });
 
-        let layer_surface = map
+        let desktop_layer = map
             .layer_for_surface(&root, smithay::desktop::WindowSurfaceType::ALL)
-            .map(|l| l.layer_surface().clone());
+            .cloned();
+        if let Some(desktop_layer) = &desktop_layer {
+            crate::handlers::layer_shell::send_layer_preferred_scale(desktop_layer, &output);
+        }
+        let layer_surface = desktop_layer.map(|l| l.layer_surface().clone());
 
         // Drop the map guard before set_focus reenters SeatHandler.
         drop(map);

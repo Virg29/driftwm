@@ -56,6 +56,10 @@ use wayland_protocols::ext::workspace::v1::client::{
     ext_workspace_handle_v1::{self, ExtWorkspaceHandleV1},
     ext_workspace_manager_v1::{self, ExtWorkspaceManagerV1},
 };
+use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1;
+use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1::{
+    self, WpFractionalScaleV1,
+};
 use wayland_protocols::wp::pointer_constraints::zv1::client::zwp_confined_pointer_v1::{
     self, ZwpConfinedPointerV1,
 };
@@ -126,6 +130,7 @@ pub struct State {
     pub spbm: Option<WpSinglePixelBufferManagerV1>,
     pub shm: Option<WlShm>,
     pub viewporter: Option<WpViewporter>,
+    pub fractional_scale_manager: Option<WpFractionalScaleManagerV1>,
     pub seat: Option<WlSeat>,
     /// Bound alongside the seat, so every scenario can observe touch delivery
     /// without opting in.
@@ -197,6 +202,10 @@ pub struct State {
     pub kde_default_modes: Vec<org_kde_kwin_server_decoration_manager::Mode>,
     /// Every `mode` this client's KDE decorations have received, oldest first.
     pub kde_decoration_modes: Vec<org_kde_kwin_server_decoration::Mode>,
+    /// Every `wp_fractional_scale_v1.preferred_scale` this client has received
+    /// as `(surface, scale in 120ths)`, oldest first. Empty until
+    /// [`Client::get_fractional_scale`] runs for a surface.
+    pub preferred_scales: Vec<(WlSurface, u32)>,
 
     /// The token string from the most recent `xdg_activation_token_v1.done`.
     pub activation_token: Option<String>,
@@ -588,6 +597,7 @@ impl Client {
             spbm: None,
             shm: None,
             viewporter: None,
+            fractional_scale_manager: None,
             seat: None,
             touch: None,
             pointer: None,
@@ -621,6 +631,7 @@ impl Client {
             data_device_events: Vec::new(),
             kde_default_modes: Vec::new(),
             kde_decoration_modes: Vec::new(),
+            preferred_scales: Vec::new(),
             activation_token: None,
             ext_workspace: ExtWorkspace::default(),
         };
@@ -958,6 +969,25 @@ impl Client {
     /// the interaction a scenario cares about.
     pub fn drain_keyboard_events(&mut self) -> Vec<KeyboardEvent> {
         std::mem::take(&mut self.state.keyboard_events)
+    }
+
+    /// `wp_fractional_scale_manager_v1.get_fractional_scale` for `surface`.
+    /// Every `preferred_scale` that follows lands in
+    /// [`State::preferred_scales`], and the compositor sends the first one
+    /// right away, at object creation.
+    pub fn get_fractional_scale(&mut self, surface: &WlSurface) -> WpFractionalScaleV1 {
+        let manager = self.state.fractional_scale_manager.as_ref().unwrap();
+        manager.get_fractional_scale(surface, &self.qh, surface.clone())
+    }
+
+    /// Every `preferred_scale` received for `surface`, in 120ths, oldest first.
+    pub fn preferred_scales_for(&self, surface: &WlSurface) -> Vec<u32> {
+        self.state
+            .preferred_scales
+            .iter()
+            .filter(|(s, _)| s == surface)
+            .map(|(_, scale)| *scale)
+            .collect()
     }
 
     /// `org_kde_kwin_server_decoration_manager.create` for `surface`.
@@ -2003,6 +2033,9 @@ impl Dispatch<WlRegistry, ()> for State {
                         OrgKdeKwinServerDecorationManager::interface().version,
                     );
                     state.kde_decoration_manager = Some(registry.bind(name, version, qh, ()));
+                } else if interface == WpFractionalScaleManagerV1::interface().name {
+                    let version = min(version, WpFractionalScaleManagerV1::interface().version);
+                    state.fractional_scale_manager = Some(registry.bind(name, version, qh, ()));
                 }
 
                 let global = Global {
@@ -2831,6 +2864,37 @@ impl Dispatch<ZwpVirtualKeyboardV1, ()> for State {
         _qhandle: &QueueHandle<Self>,
     ) {
         unreachable!()
+    }
+}
+
+impl Dispatch<WpFractionalScaleManagerV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WpFractionalScaleManagerV1,
+        _event: <WpFractionalScaleManagerV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        // The manager has no events.
+    }
+}
+
+impl Dispatch<WpFractionalScaleV1, WlSurface> for State {
+    fn event(
+        state: &mut Self,
+        _proxy: &WpFractionalScaleV1,
+        event: <WpFractionalScaleV1 as wayland_client::Proxy>::Event,
+        surface: &WlSurface,
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            wp_fractional_scale_v1::Event::PreferredScale { scale } => {
+                state.preferred_scales.push((surface.clone(), scale));
+            }
+            _ => unreachable!(),
+        }
     }
 }
 

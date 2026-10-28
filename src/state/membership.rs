@@ -1,5 +1,6 @@
 //! Per-window output membership: sends clients `wl_surface.enter`/`leave` for
-//! the outputs each window overlaps. Replaces the membership half of
+//! the outputs each window overlaps, and the `wp_fractional_scale_v1` scale of
+//! the output each window overlaps most. Replaces the membership half of
 //! `Space::refresh`, driven from `post_render` and the idle turn via
 //! [`DriftWm::refresh_window_outputs`].
 //!
@@ -14,6 +15,7 @@ use smithay::desktop::Window;
 use smithay::desktop::space::SpaceElement;
 use smithay::output::Output;
 use smithay::utils::{Logical, Rectangle};
+use smithay::wayland::fractional_scale::with_fractional_scale;
 
 use super::DriftWm;
 
@@ -105,6 +107,8 @@ impl DriftWm {
             });
             drop(map);
 
+            send_preferred_scale(window, &desired);
+
             SpaceElement::refresh(window);
         }
 
@@ -115,6 +119,39 @@ impl DriftWm {
             o.cleanup();
         }
     }
+}
+
+/// Tell the client which scale to render this window at: that of the output it
+/// overlaps most.
+///
+/// A canvas window is not bound to one viewport — it can straddle several
+/// outputs at once, and panning carries it between them with no client-visible
+/// event — so membership, which already runs after every frame, is the only
+/// place the scale can follow from. Equal overlap resolves to the sharper
+/// output, so a window split exactly down the middle is never the one that
+/// gets stretched. `set_preferred_scale` swallows repeats, so this stays inert
+/// until the window really changes output.
+fn send_preferred_scale(window: &Window, desired: &[(Output, Rectangle<i32, Logical>)]) {
+    let area = |r: &Rectangle<i32, Logical>| i64::from(r.size.w) * i64::from(r.size.h);
+    let Some((output, _)) = desired.iter().max_by(|(a_out, a), (b_out, b)| {
+        area(a).cmp(&area(b)).then_with(|| {
+            a_out
+                .current_scale()
+                .fractional_scale()
+                .total_cmp(&b_out.current_scale().fractional_scale())
+        })
+    }) else {
+        // Panned entirely off every output: keep the last scale the client was
+        // given rather than invent one for a window nobody can see.
+        return;
+    };
+
+    let scale = output.current_scale().fractional_scale();
+    window.with_surfaces(|_surface, states| {
+        with_fractional_scale(states, |fractional| {
+            fractional.set_preferred_scale(scale);
+        });
+    });
 }
 
 /// Send `output_leave` for every output the window is tracked on and clear the

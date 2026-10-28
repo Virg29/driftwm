@@ -27,6 +27,30 @@ pub(crate) struct LayerDestroyedMarker(pub AtomicBool);
 
 use crate::state::{CanvasLayer, DriftWm};
 
+/// Tell a layer surface the scale of the output it is anchored to.
+///
+/// `new_fractional_scale` fires before the surface has a layer role and can
+/// only offer the active output's scale, so a bar on any other output would
+/// render at the wrong density for its whole life. Membership never revisits
+/// it either: unlike a window, a layer surface stays on this one output.
+///
+/// Called from the commit handlers rather than from `get_layer_surface`,
+/// because the client picks the order of `get_layer_surface` and
+/// `get_fractional_scale`: correcting at role creation misses the client that
+/// asks for the scale object second. A commit always follows, every later one
+/// re-asserts it, and `set_preferred_scale` swallows repeats.
+pub(crate) fn send_layer_preferred_scale(
+    surface: &desktop::LayerSurface,
+    output: &smithay::output::Output,
+) {
+    let scale = output.current_scale().fractional_scale();
+    surface.with_surfaces(|_surface, states| {
+        smithay::wayland::fractional_scale::with_fractional_scale(states, |fractional| {
+            fractional.set_preferred_scale(scale);
+        });
+    });
+}
+
 impl WlrLayerShellHandler for DriftWm {
     fn shell_state(&mut self) -> &mut WlrLayerShellState {
         &mut self.layer_shell_state
