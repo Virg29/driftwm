@@ -374,3 +374,114 @@ fn window_shown_on_a_sharper_output_is_told_the_new_scale() {
         "re-sent exactly once, not once per frame: {on_fine:?}"
     );
 }
+
+/// A layer surface is told the scale of the output it is anchored to even when
+/// it asks for its `wp_fractional_scale_v1` object *after* taking the
+/// layer-shell role. The client picks that order, and the creation-time event
+/// can only carry the active output's scale, so correcting the scale where the
+/// role is created loses the race: the guess lands after the correction. The
+/// correction therefore lives in the commit path, where every commit
+/// re-asserts it.
+#[test]
+fn layer_asking_for_the_scale_last_still_gets_its_own_output() {
+    let mut f = Fixture::new();
+    // The active output is the coarse one, so the scale the creation-time
+    // event can offer is the wrong one for a bar anchored to the sharp output.
+    let _coarse = f.add_output_scaled(1, (1920, 1080), 1.0);
+    let fine = f.add_output_scaled(2, (2880, 1800), 1.5);
+    let id = f.add_client();
+    f.roundtrip(id);
+    assert_eq!(
+        f.state().active_output().map(|o| o.name()),
+        Some("HEADLESS-1".to_owned()),
+        "the test needs the coarse output active to be able to tell the two apart"
+    );
+
+    let wl_output = f.client(id).output(&fine.name());
+    let layer = f.client(id).create_layer(
+        Some(&wl_output),
+        wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer::Overlay,
+        "panel",
+    );
+    let surface = layer.surface.clone();
+    // Unanchored, so a non-zero requested size is required on every commit.
+    layer.set_configure_props(super::client::LayerConfigureProps {
+        size: Some((400, 300)),
+        ..Default::default()
+    });
+    layer.commit();
+    f.double_roundtrip(id);
+
+    // Only now, with the role already taken: the order this test is about.
+    f.client(id).get_fractional_scale(&surface);
+    let layer = f.client(id).layer(&surface);
+    layer.set_size(400, 300);
+    layer.attach_new_buffer();
+    layer.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    let scales = f.client(id).preferred_scales_for(&surface);
+    assert_eq!(
+        scales.last(),
+        Some(&180),
+        "the bar renders for its own 1.5 output, not the active 1.0 one, got {scales:?}"
+    );
+}
+
+/// A canvas layer surface — a layer whose namespace matched a window rule with
+/// a position, so it lives on the canvas instead of an output's layer map — is
+/// told its output's scale too. It takes an early return before the layer map
+/// and is in no output's layer map afterwards, so the layer-map path alone
+/// would leave it on whatever the creation-time event guessed.
+#[test]
+fn canvas_layer_is_told_its_own_output_scale() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "widget"
+position = [0, 0]
+"#,
+    ));
+    let _coarse = f.add_output_scaled(1, (1920, 1080), 1.0);
+    let fine = f.add_output_scaled(2, (2880, 1800), 1.5);
+    let id = f.add_client();
+    f.roundtrip(id);
+    assert_eq!(
+        f.state().active_output().map(|o| o.name()),
+        Some("HEADLESS-1".to_owned()),
+        "the test needs the coarse output active to be able to tell the two apart"
+    );
+
+    let wl_output = f.client(id).output(&fine.name());
+    let layer = f.client(id).create_layer(
+        Some(&wl_output),
+        wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer::Overlay,
+        "widget",
+    );
+    let surface = layer.surface.clone();
+    layer.set_configure_props(super::client::LayerConfigureProps {
+        size: Some((400, 300)),
+        ..Default::default()
+    });
+    layer.commit();
+    f.double_roundtrip(id);
+
+    f.client(id).get_fractional_scale(&surface);
+    let layer = f.client(id).layer(&surface);
+    layer.set_size(400, 300);
+    layer.attach_new_buffer();
+    layer.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    assert_eq!(
+        f.state().canvas_layers.len(),
+        1,
+        "the rule put it on the canvas, not in a layer map"
+    );
+    let scales = f.client(id).preferred_scales_for(&surface);
+    assert_eq!(
+        scales.last(),
+        Some(&180),
+        "the widget renders for its own 1.5 output, got {scales:?}"
+    );
+}
