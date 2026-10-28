@@ -97,8 +97,7 @@ pub(super) struct TrackpadConfig {
     pub disable_while_typing: Option<bool>,
     pub enable: Option<bool>,
     pub disable_on_external_mouse: Option<bool>,
-    pub scroll_liftoff_clamp: Option<f64>,
-    pub scroll_liftoff_fling: Option<f64>,
+    pub scroll_liftoff_damping: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Default)]

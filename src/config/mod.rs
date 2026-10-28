@@ -26,7 +26,7 @@ use defaults::{
     default_bindings, default_gesture_bindings, default_mouse_bindings, default_touch_bindings,
 };
 use parse_helpers::{
-    Warnings, clamp_warn, clamp_warn_off_or, collect_warn, non_negative, parse_backend_config,
+    Warnings, clamp_warn, collect_warn, non_negative, parse_backend_config,
     parse_decoration_config, parse_effects_config, parse_focus_placement, parse_output_outline,
     parse_output_rule, parse_window_rule, positive_or_default,
 };
@@ -806,20 +806,7 @@ impl Config {
                 // `"none"` means "use the libinput device default", same as unset.
                 click_method: t.click_method.clone().filter(|m| m.as_str() != "none"),
                 disable_while_typing: t.disable_while_typing.unwrap_or(true),
-                scroll_liftoff_clamp: clamp_warn_off_or(
-                    t.scroll_liftoff_clamp.unwrap_or(0.0),
-                    1.0,
-                    100.0,
-                    "trackpad.scroll_liftoff_clamp",
-                    &mut errors,
-                ),
-                scroll_liftoff_fling: clamp_warn(
-                    t.scroll_liftoff_fling.unwrap_or(0.5),
-                    0.0,
-                    1.0,
-                    "trackpad.scroll_liftoff_fling",
-                    &mut errors,
-                ),
+                scroll_liftoff_damping: t.scroll_liftoff_damping.unwrap_or(false),
                 // `enable = false` wins: a trackpad the user turned off outright
                 // shouldn't come back the moment the mouse is unplugged.
                 send_events: match (

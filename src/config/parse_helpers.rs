@@ -45,35 +45,6 @@ pub(super) fn collect_warn(errors: &mut Warnings, msg: String) {
 
 /// Clamp into `[min, max]`, warning when out of range so invalid numeric
 /// config is surfaced rather than silently corrected.
-/// Like [`clamp_warn`], but the range has a hole at the bottom: `0.0` means
-/// "off", and any other value must be at least `min_on`.
-///
-/// For a factor that feeds back on its own output — a cap applied to the very
-/// samples the next cap averages — a value below 1 has the fixed point zero:
-/// each frame is a fraction of the average of already-shrunk frames, so the
-/// scroll decays to a standstill under a finger that is still moving. That is
-/// never what someone typing `0.5` wanted, so it is raised and surfaced rather
-/// than silently accepted.
-pub(super) fn clamp_warn_off_or(
-    value: f64,
-    min_on: f64,
-    max: f64,
-    field: &str,
-    errors: &mut Warnings,
-) -> f64 {
-    if value > 0.0 && value < min_on {
-        push_warn(
-            errors,
-            Severity::Corrected,
-            format!(
-                "config: {field} {value} is below {min_on} without being 0 (off), using {min_on}"
-            ),
-        );
-        return min_on;
-    }
-    clamp_warn(value, 0.0, max, field, errors)
-}
-
 pub(super) fn clamp_warn<T>(value: T, min: T, max: T, field: &str, errors: &mut Warnings) -> T
 where
     T: PartialOrd + std::fmt::Display + Copy,
@@ -780,34 +751,6 @@ pub(super) fn parse_hot_corners(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn clamp_warn_off_or_raises_values_inside_the_hole() {
-        let mut errors = Vec::new();
-        // 0 is "off" and passes untouched.
-        assert_eq!(clamp_warn_off_or(0.0, 1.0, 100.0, "x", &mut errors), 0.0);
-        assert!(errors.is_empty());
-
-        // A factor below 1 would decay the capped value to zero; raise it.
-        assert_eq!(clamp_warn_off_or(0.5, 1.0, 100.0, "x", &mut errors), 1.0);
-        assert_eq!(errors.len(), 1);
-
-        // At or above the minimum, and above the maximum, behave like clamp_warn.
-        let mut errors = Vec::new();
-        assert_eq!(clamp_warn_off_or(1.0, 1.0, 100.0, "x", &mut errors), 1.0);
-        assert_eq!(clamp_warn_off_or(2.5, 1.0, 100.0, "x", &mut errors), 2.5);
-        assert!(errors.is_empty());
-        assert_eq!(
-            clamp_warn_off_or(500.0, 1.0, 100.0, "x", &mut errors),
-            100.0
-        );
-        assert_eq!(errors.len(), 1);
-
-        // Negative is below the floor, not inside the hole.
-        let mut errors = Vec::new();
-        assert_eq!(clamp_warn_off_or(-3.0, 1.0, 100.0, "x", &mut errors), 0.0);
-        assert_eq!(errors.len(), 1);
-    }
 
     #[test]
     fn clamp_warn_in_range_is_silent() {

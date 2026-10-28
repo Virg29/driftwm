@@ -967,12 +967,8 @@ pub struct DriftWm {
     pub wheel_notch_accum: f64,
 
     /// The last finger-scroll deltas delivered, newest last: the sliding
-    /// window `trackpad.scroll_liftoff_clamp` caps against and
-    /// `trackpad.scroll_liftoff_fling` scales the parting delta from. As the
-    /// fingers leave the pad its contact centroid shifts, and some trackpads
-    /// report that as a run of accelerating deltas — a client reads it as a
-    /// fast flick and keeps scrolling after the gesture ended. Cleared at
-    /// every lift; wheels and other axis sources never touch it.
+    /// window `trackpad.scroll_liftoff_damping` caps against and parts from.
+    /// Cleared at every lift; wheels and other axis sources never touch it.
     ///
     /// Per axis the sample is `None` when the event carried no delta for it,
     /// which is not the same as a delta of zero: counting an absent axis as

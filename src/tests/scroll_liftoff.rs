@@ -1,6 +1,6 @@
-//! `[input.trackpad] scroll_liftoff_clamp` / `scroll_liftoff_fling`: finger
-//! scroll is capped against the sliding average of the deltas before it, and a
-//! lift parts with a deliberate fraction of that average ahead of the stop.
+//! `[input.trackpad] scroll_liftoff_damping`: finger scroll is capped against
+//! the sliding average of the deltas before it, and a lift parts with a
+//! deliberate fraction of that average ahead of the stop.
 //! Lifting fingers shifts the contact centroid, and some pads report that as a
 //! run of accelerating deltas; a client reads those as a fast flick and keeps
 //! scrolling after the gesture ended. Each scenario asserts what the client
@@ -67,12 +67,11 @@ fn client_axes_h(f: &mut Fixture, id: ClientId) -> Vec<f64> {
     f.client(id).state.pointer_axes_h.clone()
 }
 
-/// `trackpad_scroll` reports 15 px, so a cap of 1.5 lands on 22.5 and a
-/// parting fraction of 0.5 on 7.5 — both distinct from the frames themselves.
+/// `trackpad_scroll` reports 15 px, so the cap lands on 16.5 and the parting
+/// delta on 4.5 — both distinct from the frames themselves.
 const LIFTOFF: &str = r#"
 [input.trackpad]
-scroll_liftoff_clamp = 1.5
-scroll_liftoff_fling = 0.5
+scroll_liftoff_damping = true
 
 [[window_rules]]
 app_id = "app"
@@ -121,8 +120,8 @@ fn a_spike_reaches_the_client_capped_to_the_gesture_speed() {
 
     assert_eq!(
         client_axes(&mut f, id),
-        vec![15.0, 15.0, 15.0, 15.0, 22.5],
-        "the spike arrives at 1.5x the sliding average, the rest untouched"
+        vec![15.0, 15.0, 15.0, 15.0, 16.5],
+        "the spike arrives at the cap, the rest untouched"
     );
 }
 
@@ -142,7 +141,7 @@ fn a_lift_parts_with_a_fraction_of_the_gesture_speed() {
 
     assert_eq!(
         client_axes(&mut f, id),
-        vec![15.0, 15.0, 15.0, 15.0, 7.5],
+        vec![15.0, 15.0, 15.0, 15.0, 4.5],
         "the parting delta is half the sliding average and precedes the stop"
     );
 }
@@ -243,7 +242,7 @@ fn a_sideways_spike_is_capped_against_the_gesture_speed() {
 
     assert_eq!(
         client_axes_h(&mut f, id),
-        vec![22.5],
+        vec![16.5],
         "the sideways half of the burst is capped like the vertical half"
     );
 }
@@ -262,7 +261,7 @@ fn a_sideways_scroll_is_not_diluted_by_the_vertical_frames_around_it() {
     }
     // Two sideways frames of the same size as the vertical ones: ordinary
     // motion, nothing like a spike. Counting the vertical frames as horizontal
-    // zeros would put the average at 15/5 and cap the second one at 4.5.
+    // zeros would put the average at 15/5 and cap the second one at 3.3.
     scroll_h(&mut f, clock, 15.0);
     scroll_h(&mut f, clock, 15.0);
 
@@ -280,8 +279,8 @@ fn a_sideways_scroll_is_not_diluted_by_the_vertical_frames_around_it() {
 /// panning with it, so both halves see the same damped delta.
 #[test]
 fn the_canvas_flings_from_the_gesture_speed_not_the_burst() {
-    let damped = canvas_launch_speed(1.5);
-    let raw = canvas_launch_speed(0.0);
+    let damped = canvas_launch_speed(true);
+    let raw = canvas_launch_speed(false);
 
     assert!(
         damped < raw / 2.0,
@@ -292,13 +291,12 @@ fn the_canvas_flings_from_the_gesture_speed_not_the_burst() {
 }
 
 /// Pan the canvas with a finger scroll that ends in a spike, and report the
-/// speed the camera would coast away at. `clamp` of 0 is the option off.
-fn canvas_launch_speed(clamp: f64) -> f64 {
+/// speed the camera would coast away at.
+fn canvas_launch_speed(damping: bool) -> f64 {
     let cfg = format!(
         r#"
 [input.trackpad]
-scroll_liftoff_clamp = {clamp}
-scroll_liftoff_fling = 0.5
+scroll_liftoff_damping = {damping}
 "#
     );
     let mut f = Fixture::with_config(config(&cfg));

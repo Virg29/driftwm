@@ -469,14 +469,9 @@ pub struct TrackpadSettings {
     pub click_method: Option<String>,
     pub disable_while_typing: bool,
     pub send_events: SendEvents,
-    /// Cap on a finger-scroll delta, as a multiple of the sliding average of
-    /// the deltas before it. 0 (the default) forwards every delta untouched;
-    /// any other value is at least 1.0, since the average is built from
-    /// already-capped deltas and a smaller factor decays the scroll to zero.
-    pub scroll_liftoff_clamp: f64,
-    /// The parting delta sent at a finger-lift, as a fraction of that sliding
-    /// average. Inert while `scroll_liftoff_clamp` is 0.
-    pub scroll_liftoff_fling: f64,
+    /// Damp the delta burst a trackpad emits as contact breaks. Off by
+    /// default; only pads that report the burst need it.
+    pub scroll_liftoff_damping: bool,
 }
 
 impl Default for TrackpadSettings {
@@ -489,8 +484,7 @@ impl Default for TrackpadSettings {
             accel_profile: AccelProfile::Adaptive,
             click_method: None,
             disable_while_typing: true,
-            scroll_liftoff_clamp: 0.0,
-            scroll_liftoff_fling: 0.5,
+            scroll_liftoff_damping: false,
             send_events: SendEvents::Enabled,
         }
     }
