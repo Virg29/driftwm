@@ -301,3 +301,76 @@ decoration = "server"
         "the whole frame stays inside the survivor"
     );
 }
+
+/// The client is told a new `wp_fractional_scale_v1` scale when its window
+/// comes up on an output of a different density. Before the membership pass
+/// carried the scale, `set_preferred_scale` had a single call site at surface
+/// creation, so a window born on a 1.0 output rendered at 1.0 for the rest of
+/// its life and the compositor stretched its buffer onto the 1.5 panel.
+///
+/// Both outputs start with a camera on the canvas origin, so their viewports
+/// coincide; the sharp one is panned away first so each window belongs to one
+/// output at a time, the way separate panels behave.
+///
+/// The scale follows visibility, not the output set: unplugging the coarse
+/// output leaves the window off-canvas, where no scale is right and the client
+/// keeps the one it has. It is panning the survivor onto the window — the
+/// moment the window is actually shown at 1.5 — that re-sends.
+///
+/// Assertions are on the tail of the log, not the whole of it: the protocol
+/// makes the compositor send one `preferred_scale` as the object is created,
+/// and at that moment the surface has no geometry, so `new_fractional_scale`
+/// can only offer the active output's scale.
+#[test]
+fn window_shown_on_a_sharper_output_is_told_the_new_scale() {
+    let mut f = Fixture::new();
+    let coarse = f.add_output_scaled(1, (1920, 1080), 1.0);
+    let fine = f.add_output_scaled(2, (2880, 1800), 1.5);
+    crate::state::output_state(&fine).camera = Point::from((5000.0, 5000.0));
+    f.state().update_output_from_camera();
+    let id = f.add_client();
+
+    let surface = map_window(&mut f, id, "app", (400, 300));
+    f.client(id).get_fractional_scale(&surface);
+    f.double_roundtrip(id);
+
+    let window = window_by_app_id(&mut f, "app").unwrap();
+    assert_eq!(
+        f.state().output_for_window(&window).map(|o| o.name()),
+        Some(coarse.name()),
+        "the window opens on the coarse output"
+    );
+    let on_coarse = f.client(id).preferred_scales_for(&surface);
+    assert_eq!(
+        on_coarse.last(),
+        Some(&120),
+        "and is told to render 1:1 for it, got {on_coarse:?}"
+    );
+
+    f.remove_output(&coarse);
+    f.double_roundtrip(id);
+    assert_eq!(
+        f.client(id).preferred_scales_for(&surface),
+        on_coarse,
+        "off every viewport, the client is left alone rather than handed a \
+         scale for an output that does not show it"
+    );
+
+    // The survivor pans onto the window: now it really is on a 1.5 output.
+    crate::state::output_state(&fine).camera = Point::from((-960.0, -600.0));
+    f.state().update_output_from_camera();
+    f.state().refresh_window_outputs();
+    f.double_roundtrip(id);
+
+    let on_fine = f.client(id).preferred_scales_for(&surface);
+    assert_eq!(
+        on_fine.last(),
+        Some(&180),
+        "shown at 1.5, the client is told 1.5, got {on_fine:?}"
+    );
+    assert_eq!(
+        on_fine.len(),
+        on_coarse.len() + 1,
+        "re-sent exactly once, not once per frame: {on_fine:?}"
+    );
+}

@@ -136,6 +136,19 @@ impl WlrLayerShellHandler for DriftWm {
         if let Err(e) = map.map_layer(&desktop_surface) {
             tracing::warn!("Failed to map layer surface: {e}");
         }
+        drop(map);
+
+        // Now that the surface has an output, correct the scale it was handed:
+        // `new_fractional_scale` fires before a layer has one and samples the
+        // active output, so a bar on the other output rendered at the wrong
+        // density for the rest of its life. Unlike a window, a layer surface
+        // stays on this one output, so the membership pass never revisits it.
+        let scale = resolved_output.current_scale().fractional_scale();
+        desktop_surface.with_surfaces(|_surface, states| {
+            smithay::wayland::fractional_scale::with_fractional_scale(states, |fractional| {
+                fractional.set_preferred_scale(scale);
+            });
+        });
     }
 
     fn layer_destroyed(&mut self, surface: LayerSurface) {
