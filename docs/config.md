@@ -206,6 +206,18 @@ Default: `true`
 
 palm rejection
 
+### `scroll_liftoff_clamp`
+
+Default: `0.0`
+
+cap a finger-scroll delta at this multiple of the sliding average of the deltas before it; 0 forwards every delta untouched, and anything else is raised to at least 1.0 — the average is built from already-capped deltas, so a factor below 1 shrinks the scroll frame after frame until it stands still under a moving finger. Lifting fingers shifts the contact centroid, and some pads report a run of accelerating deltas as contact breaks; a client reads those as a fast flick and keeps scrolling after the gesture ended, and the canvas flings the same way. The cap flattens that run as it builds, so a deliberate flick still gets through (it may accelerate by this factor per frame) while a pad's parting spike does not. Wheels are never capped.
+
+### `scroll_liftoff_fling`
+
+Default: `0.5`
+
+the delta a finger-lift sends ahead of the stop, as a fraction of that sliding average, so the fling a client reads is the gesture's own speed rather than whatever the pad reported last. Inert while scroll_liftoff_clamp is 0.
+
 ### `enable`
 
 Default: `true`

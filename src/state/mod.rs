@@ -39,7 +39,7 @@ mod session_store;
 mod stage_window;
 mod suspended;
 mod viewport;
-mod viewport_animation;
+pub(crate) mod viewport_animation;
 pub(crate) mod window_animation;
 mod window_animation_driver;
 mod window_frame;
@@ -93,7 +93,7 @@ use smithay::{
         shm::ShmState,
     },
 };
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::time::Instant;
@@ -965,6 +965,32 @@ pub struct DriftWm {
     /// here and the bound action fires once per whole notch. Direction
     /// flips discard the residual.
     pub wheel_notch_accum: f64,
+
+    /// The last finger-scroll deltas delivered, newest last: the sliding
+    /// window `trackpad.scroll_liftoff_clamp` caps against and
+    /// `trackpad.scroll_liftoff_fling` scales the parting delta from. As the
+    /// fingers leave the pad its contact centroid shifts, and some trackpads
+    /// report that as a run of accelerating deltas — a client reads it as a
+    /// fast flick and keeps scrolling after the gesture ended. Cleared at
+    /// every lift; wheels and other axis sources never touch it.
+    ///
+    /// Per axis the sample is `None` when the event carried no delta for it,
+    /// which is not the same as a delta of zero: counting an absent axis as
+    /// `0.0` would drag its average toward zero, and a vertical gesture would
+    /// leave the horizontal cap resting on an average of nothing.
+    pub scroll_window: VecDeque<(Option<f64>, Option<f64>)>,
+
+    /// Event time of the newest sample in [`Self::scroll_window`]. libinput
+    /// reports nothing at all while fingers rest motionless on the pad, so the
+    /// window alone cannot tell a gesture still in flight from one that paused
+    /// — this timestamp can, and a window older than the pause threshold is
+    /// dropped rather than used.
+    pub scroll_window_time: Option<u32>,
+
+    /// The last finger-scroll frame delivered, the template the parting delta
+    /// at a lift is built from — it carries the source and per-axis relative
+    /// direction the client is already seeing.
+    pub scroll_last_frame: Option<smithay::input::pointer::AxisFrame>,
 
     pub tap: TapTracker,
     /// Action queued by a completed tap chord, run after the closure forwards
